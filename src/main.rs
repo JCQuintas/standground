@@ -11,14 +11,24 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let foreground = args.iter().any(|a| a == "--foreground" || a == "-f");
     let debug = args.iter().any(|a| a == "--debug" || a == "-d");
+    let is_app_bundle = is_running_from_app_bundle();
 
     unsafe { DEBUG = debug; }
 
-    if foreground {
+    if foreground || is_app_bundle {
         app::run();
     } else {
         daemonize(debug);
     }
+}
+
+/// Detect if we're running inside a .app bundle (Contents/MacOS/standground).
+fn is_running_from_app_bundle() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .map(|parent| parent.ends_with("Contents/MacOS"))
+        .unwrap_or(false)
 }
 
 fn daemonize(debug: bool) {

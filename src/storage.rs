@@ -76,7 +76,20 @@ pub fn set_launch_at_login(enabled: bool) -> io::Result<()> {
 
     if enabled {
         let exe = std::env::current_exe()?;
-        let exe_str = exe.to_string_lossy();
+        let program_args = if let Some(app_path) = get_app_bundle_path(&exe) {
+            // Running from .app bundle — use `open` so macOS handles it properly
+            let app_str = app_path.to_string_lossy();
+            format!(
+                "        <string>/usr/bin/open</string>\n        <string>-a</string>\n        <string>{app_str}</string>"
+            )
+        } else {
+            // Running as standalone binary
+            let exe_str = exe.to_string_lossy();
+            format!(
+                "        <string>{exe_str}</string>\n        <string>--foreground</string>"
+            )
+        };
+
         let plist = format!(
 r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -86,8 +99,7 @@ r#"<?xml version="1.0" encoding="UTF-8"?>
     <string>{LAUNCH_AGENT_LABEL}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{exe_str}</string>
-        <string>--foreground</string>
+{program_args}
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -102,6 +114,22 @@ r#"<?xml version="1.0" encoding="UTF-8"?>
     }
 
     Ok(())
+}
+
+/// If the binary is inside a .app bundle, return the .app directory path.
+fn get_app_bundle_path(exe: &PathBuf) -> Option<PathBuf> {
+    // Binary is at Something.app/Contents/MacOS/standground
+    let macos_dir = exe.parent()?;
+    let contents_dir = macos_dir.parent()?;
+    let app_dir = contents_dir.parent()?;
+    if macos_dir.ends_with("MacOS")
+        && contents_dir.ends_with("Contents")
+        && app_dir.extension().is_some_and(|ext| ext == "app")
+    {
+        Some(app_dir.to_path_buf())
+    } else {
+        None
+    }
 }
 
 pub fn is_launch_agent_installed() -> bool {

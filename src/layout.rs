@@ -102,7 +102,7 @@ pub fn restore_layout(store: &LayoutStore) -> Result<(usize, usize), String> {
         // Switch to this space
         if !display_uuid.is_empty() && space_id != get_active_space() {
             switch_to_space(space_id, &display_uuid);
-            std::thread::sleep(std::time::Duration::from_millis(300));
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
 
         // Build lookup indexes for this space's saved windows

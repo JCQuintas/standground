@@ -1,6 +1,6 @@
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
 
@@ -39,7 +39,7 @@ pub fn load_layouts() -> LayoutStore {
 pub fn save_layouts(store: &LayoutStore) -> io::Result<()> {
     let path = data_dir()?.join("layouts.json");
     let json = serde_json::to_string_pretty(store)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(io::Error::other)?;
     atomic_write(&path, json.as_bytes())
 }
 
@@ -57,7 +57,7 @@ pub fn load_config() -> AppConfig {
 pub fn save_config(config: &AppConfig) -> io::Result<()> {
     let path = data_dir()?.join("config.json");
     let json = serde_json::to_string_pretty(config)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(io::Error::other)?;
     atomic_write(&path, json.as_bytes())
 }
 
@@ -117,7 +117,7 @@ r#"<?xml version="1.0" encoding="UTF-8"?>
 }
 
 /// If the binary is inside a .app bundle, return the .app directory path.
-fn get_app_bundle_path(exe: &PathBuf) -> Option<PathBuf> {
+fn get_app_bundle_path(exe: &Path) -> Option<PathBuf> {
     // Binary is at Something.app/Contents/MacOS/standground
     let macos_dir = exe.parent()?;
     let contents_dir = macos_dir.parent()?;

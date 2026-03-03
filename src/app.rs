@@ -513,28 +513,26 @@ extern "C" fn timer_fired_action(_this: &Object, _cmd: Sel, _sender: id) {
             }
 
             // Poll for update check results
-            if let Ok(info) = state.update_rx.try_recv() {
-                if let Some(update_info) = info {
-                    if state.config.auto_update {
-                        // Auto-update: apply immediately
-                        let download_url = update_info.download_url.clone();
-                        eprintln!("Auto-updating to v{}...", update_info.version);
-                        std::thread::spawn(move || {
-                            match crate::update::apply_update(&download_url) {
-                                Ok(()) => {
-                                    eprintln!("Update installed, restarting...");
-                                    crate::update::restart_app();
-                                }
-                                Err(e) => {
-                                    eprintln!("Auto-update failed: {e}");
-                                }
+            if let Ok(Some(update_info)) = state.update_rx.try_recv() {
+                if state.config.auto_update {
+                    // Auto-update: apply immediately
+                    let download_url = update_info.download_url.clone();
+                    eprintln!("Auto-updating to v{}...", update_info.version);
+                    std::thread::spawn(move || {
+                        match crate::update::apply_update(&download_url) {
+                            Ok(()) => {
+                                eprintln!("Update installed, restarting...");
+                                crate::update::restart_app();
                             }
-                        });
-                    } else {
-                        // Manual mode: show update in menu
-                        state.update_info = Some(update_info);
-                        rebuild_menu(state);
-                    }
+                            Err(e) => {
+                                eprintln!("Auto-update failed: {e}");
+                            }
+                        }
+                    });
+                } else {
+                    // Manual mode: show update in menu
+                    state.update_info = Some(update_info);
+                    rebuild_menu(state);
                 }
             }
         }

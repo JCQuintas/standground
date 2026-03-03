@@ -21,7 +21,9 @@ fn main() {
     let debug = args.iter().any(|a| a == "--debug" || a == "-d");
     let is_app_bundle = is_running_from_app_bundle();
 
-    unsafe { DEBUG = debug; }
+    unsafe {
+        DEBUG = debug;
+    }
 
     if foreground || is_app_bundle {
         app::run();
@@ -59,6 +61,14 @@ fn daemonize(debug: bool) {
             .spawn()
     };
 
-    let child = child.expect("Failed to spawn background process");
+    let mut child = child.expect("Failed to spawn background process");
     println!("StandGround started (pid {})", child.id());
+    // Detach: the parent exits immediately after spawning the daemon.
+    // We won't wait for the child — it runs independently.
+    std::mem::drop(child.stdout.take());
+    std::mem::drop(child.stderr.take());
+    std::mem::drop(child.stdin.take());
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
 }

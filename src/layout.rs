@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::display::{DisplayConfiguration, get_current_configuration};
+use crate::display::{get_current_configuration, DisplayConfiguration};
 use crate::window::{
     enumerate_windows, get_active_space, get_all_space_ids, set_window_position, switch_to_space,
     WindowInfo,
@@ -114,10 +114,7 @@ pub fn restore_layout(store: &LayoutStore) -> Result<(usize, usize), String> {
                 window_title: sw.window_title.clone(),
             };
             by_key.insert(key, sw);
-            by_bundle
-                .entry(sw.bundle_id.clone())
-                .or_default()
-                .push(sw);
+            by_bundle.entry(sw.bundle_id.clone()).or_default().push(sw);
         }
 
         // Re-enumerate windows on this space

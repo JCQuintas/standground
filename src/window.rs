@@ -2,9 +2,7 @@ use core_foundation::base::TCFType;
 use core_foundation::boolean::CFBoolean;
 use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
-use core_graphics::window::{
-    kCGWindowListExcludeDesktopElements, kCGWindowListOptionAll,
-};
+use core_graphics::window::{kCGWindowListExcludeDesktopElements, kCGWindowListOptionAll};
 
 use std::collections::HashMap;
 
@@ -55,9 +53,7 @@ extern "C" {
         display: core_foundation::base::CFTypeRef,
         space_id: u64,
     );
-    fn CGSCopyManagedDisplaySpaces(
-        cid: CGSConnectionID,
-    ) -> core_foundation::base::CFTypeRef;
+    fn CGSCopyManagedDisplaySpaces(cid: CGSConnectionID) -> core_foundation::base::CFTypeRef;
 }
 
 /// Get the Space ID for a given CGWindowID using private CGS API.
@@ -88,10 +84,18 @@ unsafe fn get_space_for_window(cid: CGSConnectionID, window_id: u32) -> u64 {
     }
 
     let mut result: i64 = 0;
-    let got = CFNumberGetValue(value, 4 /* kCFNumberSInt64Type */, &mut result as *mut _ as *mut _);
+    let got = CFNumberGetValue(
+        value,
+        4, /* kCFNumberSInt64Type */
+        &mut result as *mut _ as *mut _,
+    );
     if !got {
         let mut result32: i32 = 0;
-        if CFNumberGetValue(value, 3 /* kCFNumberSInt32Type */, &mut result32 as *mut _ as *mut _) {
+        if CFNumberGetValue(
+            value,
+            3, /* kCFNumberSInt32Type */
+            &mut result32 as *mut _ as *mut _,
+        ) {
             result = result32 as i64;
         }
     }
@@ -208,25 +212,34 @@ unsafe fn cfdict_get_raw(
 ) -> Option<core_foundation::base::CFTypeRef> {
     let cf_key = CFString::new(key);
     let mut value: core_foundation::base::CFTypeRef = std::ptr::null();
-    if CFDictionaryGetValueIfPresent(
-        dict,
-        cf_key.as_concrete_TypeRef() as *const _,
-        &mut value,
-    ) == 0
+    if CFDictionaryGetValueIfPresent(dict, cf_key.as_concrete_TypeRef() as *const _, &mut value)
+        == 0
     {
         return None;
     }
-    if value.is_null() { None } else { Some(value) }
+    if value.is_null() {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 unsafe fn cfdict_get_i64(dict: core_foundation::base::CFTypeRef, key: &str) -> Option<i64> {
     let value = cfdict_get_raw(dict, key)?;
     let mut result: i64 = 0;
-    if CFNumberGetValue(value, 4 /* kCFNumberSInt64Type */, &mut result as *mut _ as *mut _) {
+    if CFNumberGetValue(
+        value,
+        4, /* kCFNumberSInt64Type */
+        &mut result as *mut _ as *mut _,
+    ) {
         return Some(result);
     }
     let mut result32: i32 = 0;
-    if CFNumberGetValue(value, 3 /* kCFNumberSInt32Type */, &mut result32 as *mut _ as *mut _) {
+    if CFNumberGetValue(
+        value,
+        3, /* kCFNumberSInt32Type */
+        &mut result32 as *mut _ as *mut _,
+    ) {
         return Some(result32 as i64);
     }
     None
@@ -439,10 +452,8 @@ pub fn set_window_position(pid: i64, window_id: u32, bounds: &WindowBounds) -> b
                 width: bounds.width,
                 height: bounds.height,
             };
-            let size_value = AXValueCreate(
-                K_AX_VALUE_TYPE_CG_SIZE,
-                &mut size as *mut _ as *const _,
-            );
+            let size_value =
+                AXValueCreate(K_AX_VALUE_TYPE_CG_SIZE, &mut size as *mut _ as *const _);
             if !size_value.is_null() {
                 let size_attr = CFString::new("AXSize");
                 AXUIElementSetAttributeValue(
@@ -458,10 +469,8 @@ pub fn set_window_position(pid: i64, window_id: u32, bounds: &WindowBounds) -> b
                 x: bounds.x,
                 y: bounds.y,
             };
-            let position_value = AXValueCreate(
-                K_AX_VALUE_TYPE_CG_POINT,
-                &mut point as *mut _ as *const _,
-            );
+            let position_value =
+                AXValueCreate(K_AX_VALUE_TYPE_CG_POINT, &mut point as *mut _ as *const _);
             if !position_value.is_null() {
                 let pos_attr = CFString::new("AXPosition");
                 AXUIElementSetAttributeValue(
@@ -477,10 +486,8 @@ pub fn set_window_position(pid: i64, window_id: u32, bounds: &WindowBounds) -> b
                 x: bounds.x,
                 y: bounds.y,
             };
-            let position_value2 = AXValueCreate(
-                K_AX_VALUE_TYPE_CG_POINT,
-                &mut point2 as *mut _ as *const _,
-            );
+            let position_value2 =
+                AXValueCreate(K_AX_VALUE_TYPE_CG_POINT, &mut point2 as *mut _ as *const _);
             if !position_value2.is_null() {
                 let pos_attr2 = CFString::new("AXPosition");
                 AXUIElementSetAttributeValue(
@@ -505,9 +512,10 @@ pub fn check_accessibility() -> bool {
     unsafe {
         let key = CFString::new("AXTrustedCheckOptionPrompt");
         let value = CFBoolean::true_value();
-        let options = core_foundation::dictionary::CFDictionary::from_CFType_pairs(&[
-            (key, value.as_CFType()),
-        ]);
+        let options = core_foundation::dictionary::CFDictionary::from_CFType_pairs(&[(
+            key,
+            value.as_CFType(),
+        )]);
         AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef() as *const _)
     }
 }
@@ -559,8 +567,6 @@ extern "C" {
         value: *const std::ffi::c_void,
     ) -> core_foundation::base::CFTypeRef;
     fn AXIsProcessTrustedWithOptions(options: *const std::ffi::c_void) -> bool;
-    fn _AXUIElementGetWindow(
-        element: core_foundation::base::CFTypeRef,
-        window_id: *mut u32,
-    ) -> i32;
+    fn _AXUIElementGetWindow(element: core_foundation::base::CFTypeRef, window_id: *mut u32)
+        -> i32;
 }

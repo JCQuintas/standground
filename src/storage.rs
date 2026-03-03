@@ -8,8 +8,12 @@ use crate::config::AppConfig;
 use crate::layout::LayoutStore;
 
 fn data_dir() -> io::Result<PathBuf> {
-    let proj = ProjectDirs::from("com", "standground", "standground")
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Could not determine data directory"))?;
+    let proj = ProjectDirs::from("com", "standground", "standground").ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "Could not determine data directory",
+        )
+    })?;
     let dir = proj.data_dir().to_path_buf();
     fs::create_dir_all(&dir)?;
     Ok(dir)
@@ -38,8 +42,7 @@ pub fn load_layouts() -> LayoutStore {
 
 pub fn save_layouts(store: &LayoutStore) -> io::Result<()> {
     let path = data_dir()?.join("layouts.json");
-    let json = serde_json::to_string_pretty(store)
-        .map_err(io::Error::other)?;
+    let json = serde_json::to_string_pretty(store).map_err(io::Error::other)?;
     atomic_write(&path, json.as_bytes())
 }
 
@@ -56,16 +59,14 @@ pub fn load_config() -> AppConfig {
 
 pub fn save_config(config: &AppConfig) -> io::Result<()> {
     let path = data_dir()?.join("config.json");
-    let json = serde_json::to_string_pretty(config)
-        .map_err(io::Error::other)?;
+    let json = serde_json::to_string_pretty(config).map_err(io::Error::other)?;
     atomic_write(&path, json.as_bytes())
 }
 
 const LAUNCH_AGENT_LABEL: &str = "com.standground.standground";
 
 fn launch_agent_path() -> io::Result<PathBuf> {
-    let home = std::env::var("HOME")
-        .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
+    let home = std::env::var("HOME").map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
     let dir = PathBuf::from(home).join("Library/LaunchAgents");
     fs::create_dir_all(&dir)?;
     Ok(dir.join(format!("{LAUNCH_AGENT_LABEL}.plist")))
@@ -85,13 +86,11 @@ pub fn set_launch_at_login(enabled: bool) -> io::Result<()> {
         } else {
             // Running as standalone binary
             let exe_str = exe.to_string_lossy();
-            format!(
-                "        <string>{exe_str}</string>\n        <string>--foreground</string>"
-            )
+            format!("        <string>{exe_str}</string>\n        <string>--foreground</string>")
         };
 
         let plist = format!(
-r#"<?xml version="1.0" encoding="UTF-8"?>
+            r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -107,7 +106,8 @@ r#"<?xml version="1.0" encoding="UTF-8"?>
     <false/>
 </dict>
 </plist>
-"#);
+"#
+        );
         atomic_write(&plist_path, plist.as_bytes())?;
     } else if plist_path.exists() {
         fs::remove_file(&plist_path)?;

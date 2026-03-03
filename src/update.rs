@@ -60,11 +60,7 @@ pub fn check_for_update(current_version: &str) -> Result<Option<UpdateInfo>, Str
 
 /// Compare semver strings, returns true if `latest` is newer than `current`.
 fn is_newer(latest: &str, current: &str) -> bool {
-    let parse = |s: &str| -> Vec<u64> {
-        s.split('.')
-            .filter_map(|p| p.parse().ok())
-            .collect()
-    };
+    let parse = |s: &str| -> Vec<u64> { s.split('.').filter_map(|p| p.parse().ok()).collect() };
     let l = parse(latest);
     let c = parse(current);
     l > c
@@ -123,8 +119,7 @@ pub fn apply_update(download_url: &str) -> Result<(), String> {
 
     // Ensure executable permissions
     let perms = fs::Permissions::from_mode(0o755);
-    fs::set_permissions(&target, perms)
-        .map_err(|e| format!("Failed to set permissions: {e}"))?;
+    fs::set_permissions(&target, perms).map_err(|e| format!("Failed to set permissions: {e}"))?;
 
     // Clean up
     let _ = fs::remove_dir_all(&temp_dir);

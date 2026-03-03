@@ -25,8 +25,8 @@ impl DisplayConfiguration {
 }
 
 pub fn get_current_configuration() -> Result<DisplayConfiguration, String> {
-    let display_ids = CGDisplay::active_displays()
-        .map_err(|e| format!("Failed to get active displays: {e}"))?;
+    let display_ids =
+        CGDisplay::active_displays().map_err(|e| format!("Failed to get active displays: {e}"))?;
 
     let mut fingerprints = BTreeSet::new();
     for &display_id in &display_ids {
@@ -77,10 +77,8 @@ pub fn register_display_callback(sender: mpsc::Sender<DisplayEvent>) -> Result<(
     let sender_ptr = Box::into_raw(sender_box) as *mut std::ffi::c_void;
 
     unsafe {
-        let err = CGDisplayRegisterReconfigurationCallback(
-            display_reconfiguration_callback,
-            sender_ptr,
-        );
+        let err =
+            CGDisplayRegisterReconfigurationCallback(display_reconfiguration_callback, sender_ptr);
         if err != 0 {
             // Reclaim the box to avoid leak
             let _ = Box::from_raw(sender_ptr as *mut mpsc::Sender<DisplayEvent>);

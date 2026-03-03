@@ -11,7 +11,7 @@ use objc2_app_kit::{
 use objc2_foundation::{NSData, NSObject, NSSize, NSString};
 
 use crate::config::AppConfig;
-use crate::display::{DisplayEvent, register_display_callback};
+use crate::display::{register_display_callback, DisplayEvent};
 use crate::layout::{self, LayoutStore};
 use crate::storage;
 use crate::update::UpdateInfo;
@@ -330,8 +330,8 @@ pub fn run() {
         let (update_tx, update_rx) = mpsc::channel();
         let startup_tx = update_tx.clone();
         let current_version = crate::VERSION.to_string();
-        std::thread::spawn(move || {
-            match crate::update::check_for_update(&current_version) {
+        std::thread::spawn(
+            move || match crate::update::check_for_update(&current_version) {
                 Ok(info) => {
                     let _ = startup_tx.send(info);
                 }
@@ -339,8 +339,8 @@ pub fn run() {
                     eprintln!("Update check failed: {e}");
                     let _ = startup_tx.send(None);
                 }
-            }
-        });
+            },
+        );
 
         // Store app state
         let state = Box::new(AppState {

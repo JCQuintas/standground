@@ -1,15 +1,14 @@
 use std::sync::mpsc;
 use std::time::Instant;
 
-use cocoa::appkit::{
-    NSApp, NSApplication, NSApplicationActivationPolicyAccessory, NSMenu, NSMenuItem, NSStatusBar,
-    NSStatusItem, NSSquareStatusItemLength,
+use objc2::rc::Retained;
+use objc2::runtime::AnyObject;
+use objc2::{define_class, msg_send, sel, AnyThread, MainThreadMarker, MainThreadOnly};
+use objc2_app_kit::{
+    NSApplication, NSApplicationActivationPolicy, NSImage, NSMenu, NSMenuItem,
+    NSSquareStatusItemLength, NSStatusBar, NSStatusItem,
 };
-use cocoa::base::{id, nil, YES};
-use cocoa::foundation::{NSAutoreleasePool, NSString};
-use objc::declare::ClassDecl;
-use objc::runtime::{Class, Object, Sel};
-use objc::{class, msg_send, sel, sel_impl};
+use objc2_foundation::{NSData, NSObject, NSSize, NSString};
 
 use crate::config::AppConfig;
 use crate::display::{DisplayEvent, register_display_callback};
@@ -26,18 +25,256 @@ struct AppState {
     layout_store: LayoutStore,
     display_rx: mpsc::Receiver<DisplayEvent>,
     last_display_change: Option<Instant>,
-    status_item: id,
+    status_item: Retained<NSStatusItem>,
     update_info: Option<UpdateInfo>,
     update_rx: mpsc::Receiver<Option<UpdateInfo>>,
     update_tx: mpsc::Sender<Option<UpdateInfo>>,
+    mtm: MainThreadMarker,
 }
 
-pub fn run() {
-    unsafe {
-        let _pool = NSAutoreleasePool::new(nil);
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[name = "StandGroundHandler"]
+    struct StandGroundHandler;
 
-        let app = NSApp();
-        app.setActivationPolicy_(NSApplicationActivationPolicyAccessory);
+    impl StandGroundHandler {
+        #[unsafe(method(saveLayout:))]
+        fn save_layout(&self, _sender: &AnyObject) {
+            unsafe {
+                if let Some(state_ptr) = APP_STATE {
+                    let state = &mut *state_ptr;
+                    match layout::save_current_layout(&mut state.layout_store) {
+                        Ok(count) => {
+                            if let Err(e) = storage::save_layouts(&state.layout_store) {
+                                eprintln!("Error saving layouts: {e}");
+                            }
+                            eprintln!("Saved layout with {count} windows");
+                            if crate::DEBUG {
+                                if let Ok(json) =
+                                    serde_json::to_string_pretty(&state.layout_store)
+                                {
+                                    eprintln!("[debug] Current layout store:\n{json}");
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Error saving layout: {e}");
+                        }
+                    }
+                }
+            }
+        }
+
+        #[unsafe(method(restoreLayout:))]
+        fn restore_layout(&self, _sender: &AnyObject) {
+            unsafe {
+                if let Some(state_ptr) = APP_STATE {
+                    let state = &*state_ptr;
+                    match layout::restore_layout(&state.layout_store) {
+                        Ok((restored, total)) => {
+                            println!("Restored {restored}/{total} windows");
+                        }
+                        Err(e) => {
+                            eprintln!("Error restoring layout: {e}");
+                        }
+                    }
+                }
+            }
+        }
+
+        #[unsafe(method(toggleAutoRestore:))]
+        fn toggle_auto_restore(&self, _sender: &AnyObject) {
+            unsafe {
+                if let Some(state_ptr) = APP_STATE {
+                    let state = &mut *state_ptr;
+                    state.config.auto_restore = !state.config.auto_restore;
+                    if let Err(e) = storage::save_config(&state.config) {
+                        eprintln!("Error saving config: {e}");
+                    }
+                    rebuild_menu(state);
+                    println!(
+                        "Auto-restore: {}",
+                        if state.config.auto_restore {
+                            "On"
+                        } else {
+                            "Off"
+                        }
+                    );
+                }
+            }
+        }
+
+        #[unsafe(method(toggleLaunchAtLogin:))]
+        fn toggle_launch_at_login(&self, _sender: &AnyObject) {
+            unsafe {
+                if let Some(state_ptr) = APP_STATE {
+                    let state = &mut *state_ptr;
+                    state.config.launch_at_login = !state.config.launch_at_login;
+                    if let Err(e) = storage::save_config(&state.config) {
+                        eprintln!("Error saving config: {e}");
+                    }
+                    if let Err(e) = storage::set_launch_at_login(state.config.launch_at_login) {
+                        eprintln!("Error updating launch agent: {e}");
+                    }
+                    rebuild_menu(state);
+                    eprintln!(
+                        "Launch at Login: {}",
+                        if state.config.launch_at_login {
+                            "On"
+                        } else {
+                            "Off"
+                        }
+                    );
+                }
+            }
+        }
+
+        #[unsafe(method(toggleAutoUpdate:))]
+        fn toggle_auto_update(&self, _sender: &AnyObject) {
+            unsafe {
+                if let Some(state_ptr) = APP_STATE {
+                    let state = &mut *state_ptr;
+                    state.config.auto_update = !state.config.auto_update;
+                    if let Err(e) = storage::save_config(&state.config) {
+                        eprintln!("Error saving config: {e}");
+                    }
+                    rebuild_menu(state);
+                    eprintln!(
+                        "Auto-update: {}",
+                        if state.config.auto_update {
+                            "On"
+                        } else {
+                            "Off"
+                        }
+                    );
+                }
+            }
+        }
+
+        #[unsafe(method(checkForUpdates:))]
+        fn check_for_updates(&self, _sender: &AnyObject) {
+            unsafe {
+                if let Some(state_ptr) = APP_STATE {
+                    let state = &mut *state_ptr;
+                    let tx = state.update_tx.clone();
+                    let current_version = crate::VERSION.to_string();
+                    std::thread::spawn(move || {
+                        match crate::update::check_for_update(&current_version) {
+                            Ok(Some(info)) => {
+                                eprintln!("Update available: v{}", info.version);
+                                let _ = tx.send(Some(info));
+                            }
+                            Ok(None) => {
+                                eprintln!("Already up to date");
+                                let _ = tx.send(None);
+                            }
+                            Err(e) => {
+                                eprintln!("Update check failed: {e}");
+                                let _ = tx.send(None);
+                            }
+                        }
+                    });
+                }
+            }
+        }
+
+        #[unsafe(method(installUpdate:))]
+        fn install_update(&self, _sender: &AnyObject) {
+            unsafe {
+                if let Some(state_ptr) = APP_STATE {
+                    let state = &*state_ptr;
+                    if let Some(info) = &state.update_info {
+                        let download_url = info.download_url.clone();
+                        eprintln!("Installing update v{}...", info.version);
+                        std::thread::spawn(move || {
+                            match crate::update::apply_update(&download_url) {
+                                Ok(()) => {
+                                    eprintln!("Update installed, restarting...");
+                                    crate::update::restart_app();
+                                }
+                                Err(e) => {
+                                    eprintln!("Failed to install update: {e}");
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+        }
+
+        #[unsafe(method(quitApp:))]
+        fn quit_app(&self, _sender: &AnyObject) {
+            unsafe {
+                let mtm = MainThreadMarker::new_unchecked();
+                let app = NSApplication::sharedApplication(mtm);
+                app.terminate(None);
+            }
+        }
+
+        #[unsafe(method(timerFired:))]
+        fn timer_fired(&self, _sender: &AnyObject) {
+            unsafe {
+                if let Some(state_ptr) = APP_STATE {
+                    let state = &mut *state_ptr;
+
+                    // Check for display change events
+                    while let Ok(_event) = state.display_rx.try_recv() {
+                        state.last_display_change = Some(Instant::now());
+                    }
+
+                    // Debounce: wait 2 seconds after last display change before restoring
+                    if let Some(last_change) = state.last_display_change {
+                        if last_change.elapsed().as_secs() >= 2 && state.config.auto_restore {
+                            state.last_display_change = None;
+                            println!(
+                                "Display configuration changed, auto-restoring layout..."
+                            );
+                            match layout::restore_layout(&state.layout_store) {
+                                Ok((restored, total)) => {
+                                    println!("Auto-restored {restored}/{total} windows");
+                                }
+                                Err(e) => {
+                                    eprintln!("No layout to restore: {e}");
+                                }
+                            }
+                        }
+                    }
+
+                    // Poll for update check results
+                    if let Ok(Some(update_info)) = state.update_rx.try_recv() {
+                        if state.config.auto_update {
+                            // Auto-update: apply immediately
+                            let download_url = update_info.download_url.clone();
+                            eprintln!("Auto-updating to v{}...", update_info.version);
+                            std::thread::spawn(move || {
+                                match crate::update::apply_update(&download_url) {
+                                    Ok(()) => {
+                                        eprintln!("Update installed, restarting...");
+                                        crate::update::restart_app();
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Auto-update failed: {e}");
+                                    }
+                                }
+                            });
+                        } else {
+                            // Manual mode: show update in menu
+                            state.update_info = Some(update_info);
+                            rebuild_menu(state);
+                        }
+                    }
+                }
+            }
+        }
+    }
+);
+
+pub fn run() {
+    let mtm = MainThreadMarker::new().expect("must be called from the main thread");
+
+    unsafe {
+        let app = NSApplication::sharedApplication(mtm);
+        app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
         // Check permissions
         if !window::check_accessibility() {
@@ -65,30 +302,29 @@ pub fn run() {
         }
 
         // Create status bar item with brick icon
-        let status_bar = NSStatusBar::systemStatusBar(nil);
-        let status_item = status_bar.statusItemWithLength_(NSSquareStatusItemLength);
+        let status_bar = NSStatusBar::systemStatusBar();
+        let status_item = status_bar.statusItemWithLength(NSSquareStatusItemLength);
 
         let icon_bytes = include_bytes!("../assets/icon.svg");
-        let ns_data: id = msg_send![class!(NSData), dataWithBytes:icon_bytes.as_ptr()
-                                                     length:icon_bytes.len()];
-        let icon_image: id = msg_send![class!(NSImage), alloc];
-        let icon_image: id = msg_send![icon_image, initWithData: ns_data];
-        // Set as template so macOS handles light/dark mode automatically
-        let _: () = msg_send![icon_image, setTemplate: YES];
-        // Size to fit the menu bar
-        let icon_size = cocoa::foundation::NSSize::new(18.0, 18.0);
-        let _: () = msg_send![icon_image, setSize: icon_size];
+        let ns_data = NSData::with_bytes(icon_bytes);
+        let icon_image =
+            NSImage::initWithData(NSImage::alloc(), &ns_data).expect("Failed to create icon image");
+        icon_image.setTemplate(true);
+        icon_image.setSize(NSSize::new(18.0, 18.0));
 
-        let button: id = msg_send![status_item, button];
-        let _: () = msg_send![button, setImage: icon_image];
-        let _: () = msg_send![status_item, setHighlightMode: YES];
-
-        // Register custom ObjC class for menu actions
-        register_menu_handler_class();
+        if let Some(button) = status_item.button(mtm) {
+            button.setImage(Some(&icon_image));
+        }
 
         // Build menu
-        let menu = build_menu(config.auto_restore, config.launch_at_login, config.auto_update, &None);
-        status_item.setMenu_(menu);
+        let menu = build_menu(
+            config.auto_restore,
+            config.launch_at_login,
+            config.auto_update,
+            &None,
+            mtm,
+        );
+        status_item.setMenu(Some(&menu));
 
         // Set up update checking
         let (update_tx, update_rx) = mpsc::channel();
@@ -116,71 +352,75 @@ pub fn run() {
             update_info: None,
             update_rx,
             update_tx,
+            mtm,
         });
         APP_STATE = Some(Box::into_raw(state));
 
         // Set up a repeating timer to poll for display changes
-        let timer_interval = 1.0; // seconds
-        let handler_class = class!(StandGroundHandler);
-        let handler: id = msg_send![handler_class, new];
+        let handler: Retained<StandGroundHandler> = msg_send![StandGroundHandler::alloc(), init];
 
-        let timer_cls = class!(NSTimer);
-        let _timer: id = msg_send![timer_cls,
-            scheduledTimerWithTimeInterval: timer_interval
-            target: handler
-            selector: sel!(timerFired:)
-            userInfo: nil
-            repeats: YES
-        ];
+        let _timer = objc2_foundation::NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
+            1.0,
+            &handler,
+            sel!(timerFired:),
+            None,
+            true,
+        );
 
         app.run();
     }
 }
 
-unsafe fn build_menu(auto_restore: bool, launch_at_login: bool, auto_update: bool, update_info: &Option<UpdateInfo>) -> id {
-    let menu = NSMenu::new(nil).autorelease();
-    let handler_class = class!(StandGroundHandler);
-    let handler: id = msg_send![handler_class, new];
+unsafe fn build_menu(
+    auto_restore: bool,
+    launch_at_login: bool,
+    auto_update: bool,
+    update_info: &Option<UpdateInfo>,
+    mtm: MainThreadMarker,
+) -> Retained<NSMenu> {
+    let menu = NSMenu::new(mtm);
+    let handler: Retained<StandGroundHandler> = msg_send![StandGroundHandler::alloc(), init];
+    let empty_str = NSString::from_str("");
 
     // Version header (disabled, just for display)
     let version_text = format!("StandGround v{}", crate::VERSION);
-    let version_title = NSString::alloc(nil).init_str(&version_text);
-    let no_action: Sel = ::std::mem::zeroed();
-    let version_item = NSMenuItem::alloc(nil).initWithTitle_action_keyEquivalent_(
-        version_title,
-        no_action,
-        NSString::alloc(nil).init_str(""),
+    let version_title = NSString::from_str(&version_text);
+    let version_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+        NSMenuItem::alloc(mtm),
+        &version_title,
+        None,
+        &empty_str,
     );
-    let _: () = msg_send![version_item, setEnabled: false];
-    menu.addItem_(version_item);
+    version_item.setEnabled(false);
+    menu.addItem(&version_item);
 
     // Separator
-    let sep0: id = msg_send![class!(NSMenuItem), separatorItem];
-    menu.addItem_(sep0);
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
 
     // Save Current Layout
-    let save_title = NSString::alloc(nil).init_str("Save Current Layout");
-    let save_item = NSMenuItem::alloc(nil).initWithTitle_action_keyEquivalent_(
-        save_title,
-        sel!(saveLayout:),
-        NSString::alloc(nil).init_str(""),
+    let save_title = NSString::from_str("Save Current Layout");
+    let save_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+        NSMenuItem::alloc(mtm),
+        &save_title,
+        Some(sel!(saveLayout:)),
+        &empty_str,
     );
-    let _: () = msg_send![save_item, setTarget: handler];
-    menu.addItem_(save_item);
+    save_item.setTarget(Some(&*handler));
+    menu.addItem(&save_item);
 
     // Restore Layout
-    let restore_title = NSString::alloc(nil).init_str("Restore Layout");
-    let restore_item = NSMenuItem::alloc(nil).initWithTitle_action_keyEquivalent_(
-        restore_title,
-        sel!(restoreLayout:),
-        NSString::alloc(nil).init_str(""),
+    let restore_title = NSString::from_str("Restore Layout");
+    let restore_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+        NSMenuItem::alloc(mtm),
+        &restore_title,
+        Some(sel!(restoreLayout:)),
+        &empty_str,
     );
-    let _: () = msg_send![restore_item, setTarget: handler];
-    menu.addItem_(restore_item);
+    restore_item.setTarget(Some(&*handler));
+    menu.addItem(&restore_item);
 
     // Separator
-    let sep: id = msg_send![class!(NSMenuItem), separatorItem];
-    menu.addItem_(sep);
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
 
     // Auto-restore toggle
     let auto_text = if auto_restore {
@@ -188,14 +428,15 @@ unsafe fn build_menu(auto_restore: bool, launch_at_login: bool, auto_update: boo
     } else {
         "Auto-restore: Off"
     };
-    let auto_title = NSString::alloc(nil).init_str(auto_text);
-    let auto_item = NSMenuItem::alloc(nil).initWithTitle_action_keyEquivalent_(
-        auto_title,
-        sel!(toggleAutoRestore:),
-        NSString::alloc(nil).init_str(""),
+    let auto_title = NSString::from_str(auto_text);
+    let auto_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+        NSMenuItem::alloc(mtm),
+        &auto_title,
+        Some(sel!(toggleAutoRestore:)),
+        &empty_str,
     );
-    let _: () = msg_send![auto_item, setTarget: handler];
-    menu.addItem_(auto_item);
+    auto_item.setTarget(Some(&*handler));
+    menu.addItem(&auto_item);
 
     // Launch at Login toggle
     let login_text = if launch_at_login {
@@ -203,14 +444,15 @@ unsafe fn build_menu(auto_restore: bool, launch_at_login: bool, auto_update: boo
     } else {
         "Launch at Login: Off"
     };
-    let login_title = NSString::alloc(nil).init_str(login_text);
-    let login_item = NSMenuItem::alloc(nil).initWithTitle_action_keyEquivalent_(
-        login_title,
-        sel!(toggleLaunchAtLogin:),
-        NSString::alloc(nil).init_str(""),
+    let login_title = NSString::from_str(login_text);
+    let login_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+        NSMenuItem::alloc(mtm),
+        &login_title,
+        Some(sel!(toggleLaunchAtLogin:)),
+        &empty_str,
     );
-    let _: () = msg_send![login_item, setTarget: handler];
-    menu.addItem_(login_item);
+    login_item.setTarget(Some(&*handler));
+    menu.addItem(&login_item);
 
     // Auto-update toggle
     let update_toggle_text = if auto_update {
@@ -218,189 +460,71 @@ unsafe fn build_menu(auto_restore: bool, launch_at_login: bool, auto_update: boo
     } else {
         "Auto-update: Off"
     };
-    let update_toggle_title = NSString::alloc(nil).init_str(update_toggle_text);
-    let update_toggle_item = NSMenuItem::alloc(nil).initWithTitle_action_keyEquivalent_(
-        update_toggle_title,
-        sel!(toggleAutoUpdate:),
-        NSString::alloc(nil).init_str(""),
+    let update_toggle_title = NSString::from_str(update_toggle_text);
+    let update_toggle_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+        NSMenuItem::alloc(mtm),
+        &update_toggle_title,
+        Some(sel!(toggleAutoUpdate:)),
+        &empty_str,
     );
-    let _: () = msg_send![update_toggle_item, setTarget: handler];
-    menu.addItem_(update_toggle_item);
+    update_toggle_item.setTarget(Some(&*handler));
+    menu.addItem(&update_toggle_item);
 
     // Separator
-    let sep2: id = msg_send![class!(NSMenuItem), separatorItem];
-    menu.addItem_(sep2);
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
 
     // Update / Check for Updates item
     if let Some(info) = update_info {
         if !auto_update {
             let update_text = format!("Update to v{}", info.version);
-            let update_title = NSString::alloc(nil).init_str(&update_text);
-            let update_item = NSMenuItem::alloc(nil).initWithTitle_action_keyEquivalent_(
-                update_title,
-                sel!(installUpdate:),
-                NSString::alloc(nil).init_str(""),
+            let update_title = NSString::from_str(&update_text);
+            let update_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &update_title,
+                Some(sel!(installUpdate:)),
+                &empty_str,
             );
-            let _: () = msg_send![update_item, setTarget: handler];
-            menu.addItem_(update_item);
+            update_item.setTarget(Some(&*handler));
+            menu.addItem(&update_item);
         } else {
-            let check_title = NSString::alloc(nil).init_str("Check for Updates");
-            let check_item = NSMenuItem::alloc(nil).initWithTitle_action_keyEquivalent_(
-                check_title,
-                sel!(checkForUpdates:),
-                NSString::alloc(nil).init_str(""),
+            let check_title = NSString::from_str("Check for Updates");
+            let check_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &check_title,
+                Some(sel!(checkForUpdates:)),
+                &empty_str,
             );
-            let _: () = msg_send![check_item, setTarget: handler];
-            menu.addItem_(check_item);
+            check_item.setTarget(Some(&*handler));
+            menu.addItem(&check_item);
         }
     } else {
-        let check_title = NSString::alloc(nil).init_str("Check for Updates");
-        let check_item = NSMenuItem::alloc(nil).initWithTitle_action_keyEquivalent_(
-            check_title,
-            sel!(checkForUpdates:),
-            NSString::alloc(nil).init_str(""),
+        let check_title = NSString::from_str("Check for Updates");
+        let check_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &check_title,
+            Some(sel!(checkForUpdates:)),
+            &empty_str,
         );
-        let _: () = msg_send![check_item, setTarget: handler];
-        menu.addItem_(check_item);
+        check_item.setTarget(Some(&*handler));
+        menu.addItem(&check_item);
     }
 
     // Quit
-    let quit_title = NSString::alloc(nil).init_str("Quit");
-    let quit_item = NSMenuItem::alloc(nil).initWithTitle_action_keyEquivalent_(
-        quit_title,
-        sel!(quitApp:),
-        NSString::alloc(nil).init_str(""),
+    let quit_title = NSString::from_str("Quit");
+    let quit_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+        NSMenuItem::alloc(mtm),
+        &quit_title,
+        Some(sel!(quitApp:)),
+        &empty_str,
     );
-    let _: () = msg_send![quit_item, setTarget: handler];
-    menu.addItem_(quit_item);
+    quit_item.setTarget(Some(&*handler));
+    menu.addItem(&quit_item);
+
+    // Leak the handler to keep it alive — NSMenuItem.target is an unretained reference,
+    // so the handler must outlive the menu items.
+    std::mem::forget(handler);
 
     menu
-}
-
-fn register_menu_handler_class() {
-    let superclass = class!(NSObject);
-    if Class::get("StandGroundHandler").is_some() {
-        return;
-    }
-    let mut decl = ClassDecl::new("StandGroundHandler", superclass).unwrap();
-
-    unsafe {
-        decl.add_method(
-            sel!(saveLayout:),
-            save_layout_action as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            sel!(restoreLayout:),
-            restore_layout_action as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            sel!(toggleAutoRestore:),
-            toggle_auto_restore_action as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            sel!(toggleLaunchAtLogin:),
-            toggle_launch_at_login_action as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            sel!(toggleAutoUpdate:),
-            toggle_auto_update_action as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            sel!(checkForUpdates:),
-            check_for_updates_action as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            sel!(installUpdate:),
-            install_update_action as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            sel!(quitApp:),
-            quit_app_action as extern "C" fn(&Object, Sel, id),
-        );
-        decl.add_method(
-            sel!(timerFired:),
-            timer_fired_action as extern "C" fn(&Object, Sel, id),
-        );
-    }
-
-    decl.register();
-}
-
-extern "C" fn save_layout_action(_this: &Object, _cmd: Sel, _sender: id) {
-    unsafe {
-        if let Some(state_ptr) = APP_STATE {
-            let state = &mut *state_ptr;
-            match layout::save_current_layout(&mut state.layout_store) {
-                Ok(count) => {
-                    if let Err(e) = storage::save_layouts(&state.layout_store) {
-                        eprintln!("Error saving layouts: {e}");
-                    }
-                    eprintln!("Saved layout with {count} windows");
-                    if crate::DEBUG {
-                        if let Ok(json) = serde_json::to_string_pretty(&state.layout_store) {
-                            eprintln!("[debug] Current layout store:\n{json}");
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error saving layout: {e}");
-                }
-            }
-        }
-    }
-}
-
-extern "C" fn restore_layout_action(_this: &Object, _cmd: Sel, _sender: id) {
-    unsafe {
-        if let Some(state_ptr) = APP_STATE {
-            let state = &*state_ptr;
-            match layout::restore_layout(&state.layout_store) {
-                Ok((restored, total)) => {
-                    println!("Restored {restored}/{total} windows");
-                }
-                Err(e) => {
-                    eprintln!("Error restoring layout: {e}");
-                }
-            }
-        }
-    }
-}
-
-extern "C" fn toggle_auto_restore_action(_this: &Object, _cmd: Sel, _sender: id) {
-    unsafe {
-        if let Some(state_ptr) = APP_STATE {
-            let state = &mut *state_ptr;
-            state.config.auto_restore = !state.config.auto_restore;
-            if let Err(e) = storage::save_config(&state.config) {
-                eprintln!("Error saving config: {e}");
-            }
-            rebuild_menu(state);
-            println!(
-                "Auto-restore: {}",
-                if state.config.auto_restore { "On" } else { "Off" }
-            );
-        }
-    }
-}
-
-extern "C" fn toggle_launch_at_login_action(_this: &Object, _cmd: Sel, _sender: id) {
-    unsafe {
-        if let Some(state_ptr) = APP_STATE {
-            let state = &mut *state_ptr;
-            state.config.launch_at_login = !state.config.launch_at_login;
-            if let Err(e) = storage::save_config(&state.config) {
-                eprintln!("Error saving config: {e}");
-            }
-            if let Err(e) = storage::set_launch_at_login(state.config.launch_at_login) {
-                eprintln!("Error updating launch agent: {e}");
-            }
-            rebuild_menu(state);
-            eprintln!(
-                "Launch at Login: {}",
-                if state.config.launch_at_login { "On" } else { "Off" }
-            );
-        }
-    }
 }
 
 unsafe fn rebuild_menu(state: &AppState) {
@@ -409,132 +533,7 @@ unsafe fn rebuild_menu(state: &AppState) {
         state.config.launch_at_login,
         state.config.auto_update,
         &state.update_info,
+        state.mtm,
     );
-    state.status_item.setMenu_(menu);
-}
-
-extern "C" fn toggle_auto_update_action(_this: &Object, _cmd: Sel, _sender: id) {
-    unsafe {
-        if let Some(state_ptr) = APP_STATE {
-            let state = &mut *state_ptr;
-            state.config.auto_update = !state.config.auto_update;
-            if let Err(e) = storage::save_config(&state.config) {
-                eprintln!("Error saving config: {e}");
-            }
-            rebuild_menu(state);
-            eprintln!(
-                "Auto-update: {}",
-                if state.config.auto_update { "On" } else { "Off" }
-            );
-        }
-    }
-}
-
-extern "C" fn check_for_updates_action(_this: &Object, _cmd: Sel, _sender: id) {
-    unsafe {
-        if let Some(state_ptr) = APP_STATE {
-            let state = &mut *state_ptr;
-            let tx = state.update_tx.clone();
-            let current_version = crate::VERSION.to_string();
-            std::thread::spawn(move || {
-                match crate::update::check_for_update(&current_version) {
-                    Ok(Some(info)) => {
-                        eprintln!("Update available: v{}", info.version);
-                        let _ = tx.send(Some(info));
-                    }
-                    Ok(None) => {
-                        eprintln!("Already up to date");
-                        let _ = tx.send(None);
-                    }
-                    Err(e) => {
-                        eprintln!("Update check failed: {e}");
-                        let _ = tx.send(None);
-                    }
-                }
-            });
-        }
-    }
-}
-
-extern "C" fn install_update_action(_this: &Object, _cmd: Sel, _sender: id) {
-    unsafe {
-        if let Some(state_ptr) = APP_STATE {
-            let state = &*state_ptr;
-            if let Some(info) = &state.update_info {
-                let download_url = info.download_url.clone();
-                eprintln!("Installing update v{}...", info.version);
-                std::thread::spawn(move || {
-                    match crate::update::apply_update(&download_url) {
-                        Ok(()) => {
-                            eprintln!("Update installed, restarting...");
-                            crate::update::restart_app();
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to install update: {e}");
-                        }
-                    }
-                });
-            }
-        }
-    }
-}
-
-extern "C" fn quit_app_action(_this: &Object, _cmd: Sel, _sender: id) {
-    unsafe {
-        let app = NSApp();
-        let _: () = msg_send![app, terminate: nil];
-    }
-}
-
-extern "C" fn timer_fired_action(_this: &Object, _cmd: Sel, _sender: id) {
-    unsafe {
-        if let Some(state_ptr) = APP_STATE {
-            let state = &mut *state_ptr;
-
-            // Check for display change events
-            while let Ok(_event) = state.display_rx.try_recv() {
-                state.last_display_change = Some(Instant::now());
-            }
-
-            // Debounce: wait 2 seconds after last display change before restoring
-            if let Some(last_change) = state.last_display_change {
-                if last_change.elapsed().as_secs() >= 2 && state.config.auto_restore {
-                    state.last_display_change = None;
-                    println!("Display configuration changed, auto-restoring layout...");
-                    match layout::restore_layout(&state.layout_store) {
-                        Ok((restored, total)) => {
-                            println!("Auto-restored {restored}/{total} windows");
-                        }
-                        Err(e) => {
-                            eprintln!("No layout to restore: {e}");
-                        }
-                    }
-                }
-            }
-
-            // Poll for update check results
-            if let Ok(Some(update_info)) = state.update_rx.try_recv() {
-                if state.config.auto_update {
-                    // Auto-update: apply immediately
-                    let download_url = update_info.download_url.clone();
-                    eprintln!("Auto-updating to v{}...", update_info.version);
-                    std::thread::spawn(move || {
-                        match crate::update::apply_update(&download_url) {
-                            Ok(()) => {
-                                eprintln!("Update installed, restarting...");
-                                crate::update::restart_app();
-                            }
-                            Err(e) => {
-                                eprintln!("Auto-update failed: {e}");
-                            }
-                        }
-                    });
-                } else {
-                    // Manual mode: show update in menu
-                    state.update_info = Some(update_info);
-                    rebuild_menu(state);
-                }
-            }
-        }
-    }
+    state.status_item.setMenu(Some(&menu));
 }

@@ -172,31 +172,12 @@ pub fn switch_to_space(space_id: u64, display_uuid: &str) {
 }
 
 fn get_bundle_id_for_pid(pid: i64) -> Option<String> {
-    use cocoa::base::nil;
-    use objc::runtime::Object;
-    use objc::{class, msg_send, sel, sel_impl};
+    use objc2_app_kit::NSRunningApplication;
 
-    unsafe {
-        let cls = class!(NSRunningApplication);
-        let app: *mut Object =
-            msg_send![cls, runningApplicationWithProcessIdentifier: pid as i32];
-        if app == nil {
-            return None;
-        }
-        let bundle_id: *mut Object = msg_send![app, bundleIdentifier];
-        if bundle_id == nil {
-            return None;
-        }
-        let cstr: *const std::os::raw::c_char = msg_send![bundle_id, UTF8String];
-        if cstr.is_null() {
-            return None;
-        }
-        Some(
-            std::ffi::CStr::from_ptr(cstr)
-                .to_string_lossy()
-                .into_owned(),
-        )
-    }
+    let app = NSRunningApplication::runningApplicationWithProcessIdentifier(pid as i32);
+    let app = app?;
+    let bundle_id = app.bundleIdentifier()?;
+    Some(bundle_id.to_string())
 }
 
 /// Extract a number from a CFNumber as f64. Tries float64 then int32.

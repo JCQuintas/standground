@@ -155,12 +155,12 @@ pub fn restart_app() -> ! {
 
     // Terminate current process
     unsafe {
-        use cocoa::appkit::NSApp;
-        use cocoa::base::nil;
-        use objc::{msg_send, sel, sel_impl};
+        use objc2::MainThreadMarker;
+        use objc2_app_kit::NSApplication;
 
-        let app = NSApp();
-        let _: () = msg_send![app, terminate: nil];
+        let mtm = MainThreadMarker::new_unchecked();
+        let app = NSApplication::sharedApplication(mtm);
+        app.terminate(None);
     }
 
     // Fallback if NSApp terminate doesn't exit

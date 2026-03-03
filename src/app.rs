@@ -53,11 +53,23 @@ pub fn run() {
             eprintln!("Warning: could not register display callback: {e}");
         }
 
-        // Create status bar item
+        // Create status bar item with brick icon
         let status_bar = NSStatusBar::systemStatusBar(nil);
         let status_item = status_bar.statusItemWithLength_(NSSquareStatusItemLength);
-        let title = NSString::alloc(nil).init_str("\u{229E}"); // ⊞
-        let _: () = msg_send![status_item, setTitle: title];
+
+        let icon_bytes = include_bytes!("../assets/icon.svg");
+        let ns_data: id = msg_send![class!(NSData), dataWithBytes:icon_bytes.as_ptr()
+                                                     length:icon_bytes.len()];
+        let icon_image: id = msg_send![class!(NSImage), alloc];
+        let icon_image: id = msg_send![icon_image, initWithData: ns_data];
+        // Set as template so macOS handles light/dark mode automatically
+        let _: () = msg_send![icon_image, setTemplate: YES];
+        // Size to fit the menu bar
+        let icon_size = cocoa::foundation::NSSize::new(18.0, 18.0);
+        let _: () = msg_send![icon_image, setSize: icon_size];
+
+        let button: id = msg_send![status_item, button];
+        let _: () = msg_send![button, setImage: icon_image];
         let _: () = msg_send![status_item, setHighlightMode: YES];
 
         // Register custom ObjC class for menu actions

@@ -12,14 +12,15 @@ pub fn check_for_update(current_version: &str) -> Result<Option<UpdateInfo>, Str
     let url = "https://api.github.com/repos/jcquintas/standground/releases/latest";
     let user_agent = format!("standground/{current_version}");
 
-    let response = ureq::get(url)
-        .set("User-Agent", &user_agent)
-        .set("Accept", "application/vnd.github+json")
+    let mut response = ureq::get(url)
+        .header("User-Agent", &user_agent)
+        .header("Accept", "application/vnd.github+json")
         .call()
         .map_err(|e| format!("Failed to check for updates: {e}"))?;
 
     let body: serde_json::Value = response
-        .into_json()
+        .body_mut()
+        .read_json()
         .map_err(|e| format!("Failed to parse response: {e}"))?;
 
     let tag_name = body["tag_name"]
@@ -77,15 +78,14 @@ pub fn apply_update(download_url: &str) -> Result<(), String> {
     let archive_path = temp_dir.join("update.tar.gz");
 
     // Download the archive
-    let response = ureq::get(download_url)
-        .set("User-Agent", &format!("standground/{}", crate::VERSION))
+    let mut response = ureq::get(download_url)
+        .header("User-Agent", &format!("standground/{}", crate::VERSION))
         .call()
         .map_err(|e| format!("Failed to download update: {e}"))?;
 
-    let mut reader = response.into_reader();
     let mut file =
         fs::File::create(&archive_path).map_err(|e| format!("Failed to create archive: {e}"))?;
-    std::io::copy(&mut reader, &mut file)
+    std::io::copy(&mut response.body_mut().as_reader(), &mut file)
         .map_err(|e| format!("Failed to write archive: {e}"))?;
 
     // Extract the binary

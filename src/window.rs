@@ -2,7 +2,7 @@ use core_foundation::base::{CFType, TCFType};
 use core_foundation::boolean::CFBoolean;
 use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
-use core_graphics::display::{
+use core_graphics::window::{
     kCGWindowListExcludeDesktopElements, kCGWindowListOptionAll,
 };
 

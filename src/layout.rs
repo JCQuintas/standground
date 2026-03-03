@@ -79,30 +79,29 @@ pub fn restore_layout(store: &LayoutStore) -> Result<(usize, usize), String> {
 
     let total = layout.windows.len();
 
+    // Get all spaces in order and display UUID for switching
+    let (all_spaces, display_uuid) = get_all_space_ids();
+    let display_uuid = display_uuid.unwrap_or_default();
+    let original_space = get_active_space();
+
     // Group saved windows by space_id
     let mut saved_by_space: HashMap<u64, Vec<&SavedWindow>> = HashMap::new();
     for sw in &layout.windows {
         saved_by_space.entry(sw.space_id).or_default().push(sw);
     }
 
-    // Get all spaces and display UUID for switching
-    let (all_spaces, display_uuid) = get_all_space_ids();
-    let display_uuid = display_uuid.unwrap_or_default();
-    let original_space = get_active_space();
-
     let mut restored = 0;
 
-    // For each space that has saved windows, switch to it and restore
-    for (&space_id, saved_windows) in &saved_by_space {
-        // Only switch if this space exists and isn't the current one
-        let need_switch = space_id != 0
-            && space_id != get_active_space()
-            && all_spaces.contains(&space_id)
-            && !display_uuid.is_empty();
+    // Walk spaces in order: switch to each, restore its windows
+    for &space_id in &all_spaces {
+        let saved_windows = match saved_by_space.get(&space_id) {
+            Some(ws) => ws,
+            None => continue,
+        };
 
-        if need_switch {
+        // Switch to this space
+        if !display_uuid.is_empty() && space_id != get_active_space() {
             switch_to_space(space_id, &display_uuid);
-            // Brief pause to let the space switch complete
             std::thread::sleep(std::time::Duration::from_millis(300));
         }
 
@@ -121,7 +120,7 @@ pub fn restore_layout(store: &LayoutStore) -> Result<(usize, usize), String> {
                 .push(sw);
         }
 
-        // Re-enumerate windows (they change visibility per space)
+        // Re-enumerate windows on this space
         let current_windows = enumerate_windows();
 
         for w in &current_windows {
@@ -135,7 +134,7 @@ pub fn restore_layout(store: &LayoutStore) -> Result<(usize, usize), String> {
         }
     }
 
-    // Switch back to original space
+    // Switch back to the original space
     if !display_uuid.is_empty() && get_active_space() != original_space {
         switch_to_space(original_space, &display_uuid);
     }

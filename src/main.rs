@@ -3,6 +3,7 @@ mod config;
 mod display;
 mod layout;
 mod storage;
+mod update;
 mod window;
 
 pub static mut DEBUG: bool = false;

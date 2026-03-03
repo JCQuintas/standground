@@ -119,6 +119,22 @@ unsafe fn build_menu(auto_restore: bool, launch_at_login: bool) -> id {
     let handler_class = class!(StandGroundHandler);
     let handler: id = msg_send![handler_class, new];
 
+    // Version header (disabled, just for display)
+    let version_text = format!("StandGround v{}", crate::VERSION);
+    let version_title = NSString::alloc(nil).init_str(&version_text);
+    let no_action: Sel = ::std::mem::zeroed();
+    let version_item = NSMenuItem::alloc(nil).initWithTitle_action_keyEquivalent_(
+        version_title,
+        no_action,
+        NSString::alloc(nil).init_str(""),
+    );
+    let _: () = msg_send![version_item, setEnabled: false];
+    menu.addItem_(version_item);
+
+    // Separator
+    let sep0: id = msg_send![class!(NSMenuItem), separatorItem];
+    menu.addItem_(sep0);
+
     // Save Current Layout
     let save_title = NSString::alloc(nil).init_str("Save Current Layout");
     let save_item = NSMenuItem::alloc(nil).initWithTitle_action_keyEquivalent_(

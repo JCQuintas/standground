@@ -6,9 +6,16 @@ mod storage;
 mod window;
 
 pub static mut DEBUG: bool = false;
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("StandGround {VERSION}");
+        return;
+    }
+
     let foreground = args.iter().any(|a| a == "--foreground" || a == "-f");
     let debug = args.iter().any(|a| a == "--debug" || a == "-d");
     let is_app_bundle = is_running_from_app_bundle();

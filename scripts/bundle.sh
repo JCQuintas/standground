@@ -6,8 +6,9 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 APP_NAME="StandGround"
 BUNDLE_ID="com.standground.standground"
 APP_DIR="$PROJECT_DIR/target/${APP_NAME}.app"
+VERSION="$(grep '^version' "$PROJECT_DIR/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')"
 
-echo "Building release binary..."
+echo "Building StandGround v${VERSION}..."
 cargo build --release --manifest-path "$PROJECT_DIR/Cargo.toml"
 
 echo "Creating app bundle at $APP_DIR..."
@@ -18,8 +19,9 @@ mkdir -p "$APP_DIR/Contents/Resources"
 # Copy binary
 cp "$PROJECT_DIR/target/release/standground" "$APP_DIR/Contents/MacOS/standground"
 
-# Copy Info.plist
+# Copy Info.plist and stamp version
 cp "$PROJECT_DIR/Info.plist" "$APP_DIR/Contents/Info.plist"
+sed -i '' "s|<string>0\.1\.0</string>|<string>${VERSION}</string>|g" "$APP_DIR/Contents/Info.plist"
 
 # Add CFBundleExecutable to Info.plist if not present
 if ! grep -q "CFBundleExecutable" "$APP_DIR/Contents/Info.plist"; then

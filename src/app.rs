@@ -44,8 +44,15 @@ pub fn run() {
         }
 
         // Load persisted state
-        let config = storage::load_config();
+        let mut config = storage::load_config();
         let layout_store = storage::load_layouts();
+
+        // Sync launch agent with config (in case plist was removed externally)
+        let agent_installed = storage::is_launch_agent_installed();
+        if config.launch_at_login != agent_installed {
+            config.launch_at_login = agent_installed;
+            let _ = storage::save_config(&config);
+        }
 
         // Set up display change detection
         let (display_tx, display_rx) = mpsc::channel();
@@ -76,7 +83,7 @@ pub fn run() {
         register_menu_handler_class();
 
         // Build menu
-        let menu = build_menu(config.auto_restore);
+        let menu = build_menu(config.auto_restore, config.launch_at_login);
         status_item.setMenu_(menu);
 
         // Store app state
@@ -107,7 +114,7 @@ pub fn run() {
     }
 }
 
-unsafe fn build_menu(auto_restore: bool) -> id {
+unsafe fn build_menu(auto_restore: bool, launch_at_login: bool) -> id {
     let menu = NSMenu::new(nil).autorelease();
     let handler_class = class!(StandGroundHandler);
     let handler: id = msg_send![handler_class, new];
@@ -151,6 +158,21 @@ unsafe fn build_menu(auto_restore: bool) -> id {
     let _: () = msg_send![auto_item, setTarget: handler];
     menu.addItem_(auto_item);
 
+    // Launch at Login toggle
+    let login_text = if launch_at_login {
+        "Launch at Login: On"
+    } else {
+        "Launch at Login: Off"
+    };
+    let login_title = NSString::alloc(nil).init_str(login_text);
+    let login_item = NSMenuItem::alloc(nil).initWithTitle_action_keyEquivalent_(
+        login_title,
+        sel!(toggleLaunchAtLogin:),
+        NSString::alloc(nil).init_str(""),
+    );
+    let _: () = msg_send![login_item, setTarget: handler];
+    menu.addItem_(login_item);
+
     // Separator
     let sep2: id = msg_send![class!(NSMenuItem), separatorItem];
     menu.addItem_(sep2);
@@ -187,6 +209,10 @@ fn register_menu_handler_class() {
         decl.add_method(
             sel!(toggleAutoRestore:),
             toggle_auto_restore_action as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(toggleLaunchAtLogin:),
+            toggle_launch_at_login_action as extern "C" fn(&Object, Sel, id),
         );
         decl.add_method(
             sel!(quitApp:),
@@ -250,11 +276,32 @@ extern "C" fn toggle_auto_restore_action(_this: &Object, _cmd: Sel, _sender: id)
                 eprintln!("Error saving config: {e}");
             }
             // Rebuild menu to reflect new state
-            let menu = build_menu(state.config.auto_restore);
+            let menu = build_menu(state.config.auto_restore, state.config.launch_at_login);
             state.status_item.setMenu_(menu);
             println!(
                 "Auto-restore: {}",
                 if state.config.auto_restore { "On" } else { "Off" }
+            );
+        }
+    }
+}
+
+extern "C" fn toggle_launch_at_login_action(_this: &Object, _cmd: Sel, _sender: id) {
+    unsafe {
+        if let Some(state_ptr) = APP_STATE {
+            let state = &mut *state_ptr;
+            state.config.launch_at_login = !state.config.launch_at_login;
+            if let Err(e) = storage::save_config(&state.config) {
+                eprintln!("Error saving config: {e}");
+            }
+            if let Err(e) = storage::set_launch_at_login(state.config.launch_at_login) {
+                eprintln!("Error updating launch agent: {e}");
+            }
+            let menu = build_menu(state.config.auto_restore, state.config.launch_at_login);
+            state.status_item.setMenu_(menu);
+            eprintln!(
+                "Launch at Login: {}",
+                if state.config.launch_at_login { "On" } else { "Off" }
             );
         }
     }

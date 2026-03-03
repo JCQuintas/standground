@@ -60,3 +60,50 @@ pub fn save_config(config: &AppConfig) -> io::Result<()> {
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
     atomic_write(&path, json.as_bytes())
 }
+
+const LAUNCH_AGENT_LABEL: &str = "com.standground.standground";
+
+fn launch_agent_path() -> io::Result<PathBuf> {
+    let home = std::env::var("HOME")
+        .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
+    let dir = PathBuf::from(home).join("Library/LaunchAgents");
+    fs::create_dir_all(&dir)?;
+    Ok(dir.join(format!("{LAUNCH_AGENT_LABEL}.plist")))
+}
+
+pub fn set_launch_at_login(enabled: bool) -> io::Result<()> {
+    let plist_path = launch_agent_path()?;
+
+    if enabled {
+        let exe = std::env::current_exe()?;
+        let exe_str = exe.to_string_lossy();
+        let plist = format!(
+r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{LAUNCH_AGENT_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{exe_str}</string>
+        <string>--foreground</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>
+"#);
+        atomic_write(&plist_path, plist.as_bytes())?;
+    } else if plist_path.exists() {
+        fs::remove_file(&plist_path)?;
+    }
+
+    Ok(())
+}
+
+pub fn is_launch_agent_installed() -> bool {
+    launch_agent_path().map(|p| p.exists()).unwrap_or(false)
+}

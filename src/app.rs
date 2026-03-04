@@ -30,6 +30,8 @@ struct AppState {
     update_rx: mpsc::Receiver<Option<UpdateInfo>>,
     update_tx: mpsc::Sender<Option<UpdateInfo>>,
     mtm: MainThreadMarker,
+    has_screen_recording: bool,
+    has_accessibility: bool,
 }
 
 define_class!(
@@ -202,6 +204,11 @@ define_class!(
             }
         }
 
+        #[unsafe(method(requestPermissions:))]
+        fn request_permissions(&self, _sender: &AnyObject) {
+            request_permissions_sequentially();
+        }
+
         #[unsafe(method(quitApp:))]
         fn quit_app(&self, _sender: &AnyObject) {
             unsafe {
@@ -247,6 +254,17 @@ define_class!(
                         }
                     }
 
+                    // Poll permission state and rebuild menu if changed
+                    if !state.has_screen_recording || !state.has_accessibility {
+                        let sr = window::check_screen_recording();
+                        let ax = window::check_accessibility();
+                        if sr != state.has_screen_recording || ax != state.has_accessibility {
+                            state.has_screen_recording = sr;
+                            state.has_accessibility = ax;
+                            rebuild_menu(state);
+                        }
+                    }
+
                     // Poll for update check results
                     if let Ok(Some(update_info)) = state.update_rx.try_recv() {
                         if state.config.auto_update {
@@ -276,6 +294,20 @@ define_class!(
     }
 );
 
+/// Request permissions sequentially: Screen Recording first (non-blocking prompt),
+/// wait for it, then Accessibility (blocking modal).
+/// Must be called from the main thread so the system prompts appear.
+fn request_permissions_sequentially() {
+    if !window::check_screen_recording() {
+        window::request_screen_recording();
+        eprintln!("Screen Recording access not yet granted. Please grant access in System Settings > Privacy & Security > Screen Recording.");
+    }
+    if !window::check_accessibility() {
+        window::request_accessibility();
+        eprintln!("Accessibility access not yet granted. Please grant access in System Settings > Privacy & Security > Accessibility.");
+    }
+}
+
 pub fn run() {
     let mtm = MainThreadMarker::new().expect("must be called from the main thread");
 
@@ -283,14 +315,10 @@ pub fn run() {
         let app = NSApplication::sharedApplication(mtm);
         app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
-        // Check permissions (Screen Recording first — its prompt is non-blocking,
-        // while Accessibility shows a blocking modal dialog that would suppress it)
-        if !window::check_screen_recording() {
-            eprintln!("Screen Recording access not yet granted. Please grant access in System Settings > Privacy & Security > Screen Recording.");
-        }
-        if !window::check_accessibility() {
-            eprintln!("Accessibility access not yet granted. Please grant access in System Settings > Privacy & Security > Accessibility.");
-        }
+        // Check and request permissions (must run on main thread for prompts to appear)
+        request_permissions_sequentially();
+        let has_screen_recording = window::check_screen_recording();
+        let has_accessibility = window::check_accessibility();
 
         // Load persisted state
         let mut config = storage::load_config();
@@ -325,11 +353,13 @@ pub fn run() {
         }
 
         // Build menu
+        let has_permissions = has_screen_recording && has_accessibility;
         let menu = build_menu(
             config.auto_restore,
             config.launch_at_login,
             config.auto_update,
             &None,
+            has_permissions,
             mtm,
         );
         status_item.setMenu(Some(&menu));
@@ -361,6 +391,8 @@ pub fn run() {
             update_rx,
             update_tx,
             mtm,
+            has_screen_recording,
+            has_accessibility,
         });
         APP_STATE = Some(Box::into_raw(state));
 
@@ -384,9 +416,11 @@ unsafe fn build_menu(
     launch_at_login: bool,
     auto_update: bool,
     update_info: &Option<UpdateInfo>,
+    has_permissions: bool,
     mtm: MainThreadMarker,
 ) -> Retained<NSMenu> {
     let menu = NSMenu::new(mtm);
+    menu.setAutoenablesItems(false);
     let handler: Retained<StandGroundHandler> = msg_send![StandGroundHandler::alloc(), init];
     let empty_str = NSString::from_str("");
 
@@ -405,6 +439,21 @@ unsafe fn build_menu(
     // Separator
     menu.addItem(&NSMenuItem::separatorItem(mtm));
 
+    // Request Permissions (shown only when permissions are missing)
+    if !has_permissions {
+        let perm_title = NSString::from_str("Grant Permissions…");
+        let perm_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &perm_title,
+            Some(sel!(requestPermissions:)),
+            &empty_str,
+        );
+        perm_item.setTarget(Some(&*handler));
+        menu.addItem(&perm_item);
+
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
+    }
+
     // Save Current Layout
     let save_title = NSString::from_str("Save Current Layout");
     let save_item = NSMenuItem::initWithTitle_action_keyEquivalent(
@@ -414,6 +463,7 @@ unsafe fn build_menu(
         &empty_str,
     );
     save_item.setTarget(Some(&*handler));
+    save_item.setEnabled(has_permissions);
     menu.addItem(&save_item);
 
     // Restore Layout
@@ -425,6 +475,7 @@ unsafe fn build_menu(
         &empty_str,
     );
     restore_item.setTarget(Some(&*handler));
+    restore_item.setEnabled(has_permissions);
     menu.addItem(&restore_item);
 
     // Separator
@@ -550,11 +601,13 @@ unsafe fn build_menu(
 }
 
 unsafe fn rebuild_menu(state: &AppState) {
+    let has_permissions = state.has_screen_recording && state.has_accessibility;
     let menu = build_menu(
         state.config.auto_restore,
         state.config.launch_at_login,
         state.config.auto_update,
         &state.update_info,
+        has_permissions,
         state.mtm,
     );
     state.status_item.setMenu(Some(&menu));

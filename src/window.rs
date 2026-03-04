@@ -273,14 +273,19 @@ fn parse_bounds(dict: core_foundation::base::CFTypeRef) -> Option<WindowBounds> 
     }
 }
 
-/// Check and request Screen Recording permission (needed for CGWindowListCopyWindowInfo).
+/// Check Screen Recording permission without prompting.
 pub fn check_screen_recording() -> bool {
-    unsafe {
-        if CGPreflightScreenCaptureAccess() {
-            return true;
-        }
-        CGRequestScreenCaptureAccess()
-    }
+    unsafe { CGPreflightScreenCaptureAccess() }
+}
+
+/// Request Screen Recording permission.
+/// Calls the system API to register the app, then opens System Settings
+/// to the Screen Recording pane so the user can grant access.
+pub fn request_screen_recording() {
+    unsafe { CGRequestScreenCaptureAccess(); }
+    let _ = std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+        .spawn();
 }
 
 pub fn enumerate_windows() -> Vec<WindowInfo> {
@@ -508,7 +513,23 @@ pub fn set_window_position(pid: i64, window_id: u32, bounds: &WindowBounds) -> b
     false
 }
 
+/// Check Accessibility permission without prompting.
 pub fn check_accessibility() -> bool {
+    unsafe {
+        let key = CFString::new("AXTrustedCheckOptionPrompt");
+        let value = CFBoolean::false_value();
+        let options = core_foundation::dictionary::CFDictionary::from_CFType_pairs(&[(
+            key,
+            value.as_CFType(),
+        )]);
+        AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef() as *const _)
+    }
+}
+
+/// Request Accessibility permission.
+/// Calls the system API to show the prompt, then opens System Settings
+/// to the Accessibility pane so the user can grant access.
+pub fn request_accessibility() {
     unsafe {
         let key = CFString::new("AXTrustedCheckOptionPrompt");
         let value = CFBoolean::true_value();
@@ -516,8 +537,11 @@ pub fn check_accessibility() -> bool {
             key,
             value.as_CFType(),
         )]);
-        AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef() as *const _)
+        AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef() as *const _);
     }
+    let _ = std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        .spawn();
 }
 
 #[repr(C)]

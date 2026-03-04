@@ -11,14 +11,24 @@ jobs:
   tag:
     if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/v')
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Extract version and create tag
+        id: tag
         run: |
           VERSION="${GITHUB_HEAD_REF#release/v}"
+          echo "version=v${VERSION}" >> "$GITHUB_OUTPUT"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag "v${VERSION}"
           git push origin "v${VERSION}"
+
+  release:
+    needs: tag
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.tag.outputs.version }}

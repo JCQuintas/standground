@@ -49,9 +49,7 @@ jobs:
           cp "target/${{ matrix.target }}/release/standground" "$APP_DIR/Contents/MacOS/standground"
           cp Info.plist "$APP_DIR/Contents/Info.plist"
           sed -i '' "s|<string>0\.1\.0</string>|<string>${VERSION}</string>|g" "$APP_DIR/Contents/Info.plist"
-          if [ -f assets/icon.svg ]; then
-            cp assets/icon.svg "$APP_DIR/Contents/Resources/icon.svg"
-          fi
+          cp assets/icon.icns "$APP_DIR/Contents/Resources/icon.icns"
           DMG_NAME="StandGround-darwin-${{ matrix.arch }}.dmg"
           hdiutil create -volname "StandGround" -srcfolder "$APP_DIR" -ov -format UDZO "$DMG_NAME"
 

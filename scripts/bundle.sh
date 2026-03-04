@@ -29,9 +29,7 @@ if ! grep -q "CFBundleExecutable" "$APP_DIR/Contents/Info.plist"; then
 fi
 
 # Copy icon
-if [ -f "$PROJECT_DIR/assets/icon.svg" ]; then
-    cp "$PROJECT_DIR/assets/icon.svg" "$APP_DIR/Contents/Resources/icon.svg"
-fi
+cp "$PROJECT_DIR/assets/icon.icns" "$APP_DIR/Contents/Resources/icon.icns"
 
 echo ""
 echo "App bundle created: $APP_DIR"

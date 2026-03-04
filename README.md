@@ -15,8 +15,8 @@ When you dock/undock monitors or change display arrangements, StandGround automa
 ## Requirements
 
 - macOS
-- **Accessibility** permission (System Settings > Privacy & Security > Accessibility)
-- **Screen Recording** permission (System Settings > Privacy & Security > Screen Recording)
+- **Accessibility** permission (System Settings > Privacy & Security > Accessibility) — needed to move and resize windows across applications
+- **Screen Recording** permission (System Settings > Privacy & Security > Screen Recording) — needed to read window titles and positions from other applications
 
 The app will prompt for these permissions on first launch.
 

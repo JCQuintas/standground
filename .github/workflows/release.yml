@@ -51,7 +51,12 @@ jobs:
           sed -i '' "s|<string>0\.1\.0</string>|<string>${VERSION}</string>|g" "$APP_DIR/Contents/Info.plist"
           cp assets/icon.icns "$APP_DIR/Contents/Resources/icon.icns"
           DMG_NAME="StandGround-darwin-${{ matrix.arch }}.dmg"
-          hdiutil create -volname "StandGround" -srcfolder "$APP_DIR" -ov -format UDZO "$DMG_NAME"
+          DMG_STAGING="dmg-staging"
+          rm -rf "$DMG_STAGING"
+          mkdir -p "$DMG_STAGING"
+          mv "$APP_DIR" "$DMG_STAGING/"
+          ln -s /Applications "$DMG_STAGING/Applications"
+          hdiutil create -volname "StandGround" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG_NAME"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

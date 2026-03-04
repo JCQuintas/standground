@@ -33,9 +33,17 @@ cp "$PROJECT_DIR/assets/icon.icns" "$APP_DIR/Contents/Resources/icon.icns"
 
 echo ""
 echo "App bundle created: $APP_DIR"
+
+# Create DMG with Applications symlink for drag-and-drop install
+DMG_PATH="$PROJECT_DIR/target/StandGround.dmg"
+DMG_STAGING="$PROJECT_DIR/target/dmg-staging"
+rm -rf "$DMG_STAGING"
+mkdir -p "$DMG_STAGING"
+cp -r "$APP_DIR" "$DMG_STAGING/"
+ln -s /Applications "$DMG_STAGING/Applications"
+hdiutil create -volname "StandGround" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG_PATH"
+rm -rf "$DMG_STAGING"
+
 echo ""
-echo "To install, run:"
-echo "  cp -r \"$APP_DIR\" /Applications/"
-echo ""
-echo "Or open the containing folder:"
-echo "  open \"$(dirname "$APP_DIR")\""
+echo "DMG created: $DMG_PATH"
+echo "  open \"$DMG_PATH\""

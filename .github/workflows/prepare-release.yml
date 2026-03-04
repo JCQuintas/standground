@@ -41,12 +41,14 @@ jobs:
 
       - name: Create branch, commit, and push
         run: |
+          BRANCH="release/v${{ steps.version.outputs.version }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -b "release/v${{ steps.version.outputs.version }}"
+          git push origin --delete "$BRANCH" 2>/dev/null || true
+          git checkout -b "$BRANCH"
           git add Cargo.toml Cargo.lock
           git commit -m "release: v${{ steps.version.outputs.version }}"
-          git push origin "release/v${{ steps.version.outputs.version }}"
+          git push origin "$BRANCH"
 
       - name: Create PR
         env:

@@ -283,12 +283,13 @@ pub fn run() {
         let app = NSApplication::sharedApplication(mtm);
         app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
-        // Check permissions
-        if !window::check_accessibility() {
-            eprintln!("Accessibility access not yet granted. Please grant access in System Settings > Privacy & Security > Accessibility.");
-        }
+        // Check permissions (Screen Recording first — its prompt is non-blocking,
+        // while Accessibility shows a blocking modal dialog that would suppress it)
         if !window::check_screen_recording() {
             eprintln!("Screen Recording access not yet granted. Please grant access in System Settings > Privacy & Security > Screen Recording.");
+        }
+        if !window::check_accessibility() {
+            eprintln!("Accessibility access not yet granted. Please grant access in System Settings > Privacy & Security > Accessibility.");
         }
 
         // Load persisted state

@@ -10,7 +10,7 @@ When you dock/undock monitors or change display arrangements, StandGround automa
 - **Auto-restore** — automatically restores windows when monitors change
 - **Launch at Login** via LaunchAgent
 - **Auto-update** from GitHub releases
-- Runs as a menu bar app (no Dock icon)
+- Runs as a menu bar app
 
 ## Requirements
 

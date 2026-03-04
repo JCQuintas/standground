@@ -26,7 +26,13 @@ The app will prompt for these permissions on first launch.
 
 1. Download `StandGround-darwin-arm64.dmg` (Apple Silicon) or `StandGround-darwin-x86_64.dmg` (Intel) from the [latest release](https://github.com/jcquintas/standground/releases/latest)
 2. Open the DMG and drag `StandGround.app` to `/Applications`
-3. Launch from Applications or Spotlight
+3. If macOS says the app is "damaged" or can't be opened, either:
+   - Go to **System Settings > Privacy & Security**, scroll down and click **Open Anyway**
+   - Or run in Terminal:
+     ```sh
+     xattr -cr /Applications/StandGround.app
+     ```
+4. Launch from Applications or Spotlight
 
 ### From standalone binary
 

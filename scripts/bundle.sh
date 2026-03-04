@@ -31,6 +31,9 @@ fi
 # Copy icon
 cp "$PROJECT_DIR/assets/icon.icns" "$APP_DIR/Contents/Resources/icon.icns"
 
+# Ad-hoc sign so macOS doesn't reject the app as "damaged"
+codesign --force --deep --sign - "$APP_DIR"
+
 echo ""
 echo "App bundle created: $APP_DIR"
 

@@ -50,6 +50,7 @@ jobs:
           cp Info.plist "$APP_DIR/Contents/Info.plist"
           sed -i '' "s|<string>0\.1\.0</string>|<string>${VERSION}</string>|g" "$APP_DIR/Contents/Info.plist"
           cp assets/icon.icns "$APP_DIR/Contents/Resources/icon.icns"
+          codesign --force --deep --sign - "$APP_DIR"
           DMG_NAME="StandGround-darwin-${{ matrix.arch }}.dmg"
           DMG_STAGING="dmg-staging"
           rm -rf "$DMG_STAGING"

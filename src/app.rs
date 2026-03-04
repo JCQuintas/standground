@@ -5,8 +5,8 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, sel, AnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSImage, NSMenu, NSMenuItem,
-    NSSquareStatusItemLength, NSStatusBar, NSStatusItem,
+    NSApplication, NSApplicationActivationPolicy, NSImage, NSMenu, NSMenuItem, NSStatusBar,
+    NSStatusItem,
 };
 use objc2_foundation::{NSData, NSObject, NSSize, NSString};
 
@@ -311,7 +311,7 @@ pub fn run() {
 
         // Create status bar item with brick icon
         let status_bar = NSStatusBar::systemStatusBar();
-        let status_item = status_bar.statusItemWithLength(NSSquareStatusItemLength);
+        let status_item = status_bar.statusItemWithLength(16.0);
 
         let icon_bytes = include_bytes!("../assets/icon.svg");
         let ns_data = NSData::with_bytes(icon_bytes);

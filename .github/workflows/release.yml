@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (build only, skip GitHub release)'
+        required: true
+        default: true
+        type: boolean
 
 jobs:
   build:
@@ -58,6 +65,7 @@ jobs:
 
   release:
     needs: build
+    if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

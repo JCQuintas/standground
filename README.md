@@ -20,6 +20,39 @@ When you dock/undock monitors or change display arrangements, StandGround automa
 
 The app will prompt for these permissions on first launch.
 
+## Install
+
+### From DMG
+
+1. Download `StandGround-darwin-arm64.dmg` (Apple Silicon) or `StandGround-darwin-x86_64.dmg` (Intel) from the [latest release](https://github.com/jcquintas/standground/releases/latest)
+2. Open the DMG and drag `StandGround.app` to `/Applications`
+3. Launch from Applications or Spotlight
+
+### From standalone binary
+
+1. Download `standground-darwin-arm64.tar.gz` or `standground-darwin-x86_64.tar.gz` from the [latest release](https://github.com/jcquintas/standground/releases/latest)
+2. Extract and move to your PATH:
+   ```sh
+   tar xzf standground-darwin-*.tar.gz
+   mv standground /usr/local/bin/
+   ```
+
+### From source
+
+```sh
+git clone https://github.com/jcquintas/standground.git
+cd standground
+cargo build --release
+cp target/release/standground /usr/local/bin/
+```
+
+To build as an app bundle instead:
+
+```sh
+./scripts/bundle.sh
+cp -r target/StandGround.app /Applications/
+```
+
 ## Usage
 
 ```sh

@@ -93,7 +93,3 @@ Config and layout data are stored in:
 ├── config.json     # Settings (auto-restore, launch at login, auto-update)
 └── layouts.json    # Saved window layouts per display configuration
 ```
-
-## License
-
-MIT

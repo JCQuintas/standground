@@ -211,6 +211,13 @@ define_class!(
             }
         }
 
+        #[unsafe(method(showLicense:))]
+        fn show_license(&self, _sender: &AnyObject) {
+            let _ = std::process::Command::new("open")
+                .arg("https://github.com/JCQuintas/standground/blob/main/LICENSE")
+                .spawn();
+        }
+
         #[unsafe(method(timerFired:))]
         fn timer_fired(&self, _sender: &AnyObject) {
             unsafe {
@@ -508,6 +515,20 @@ unsafe fn build_menu(
         check_item.setTarget(Some(&*handler));
         menu.addItem(&check_item);
     }
+
+    // License
+    let license_title = NSString::from_str("License");
+    let license_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+        NSMenuItem::alloc(mtm),
+        &license_title,
+        Some(sel!(showLicense:)),
+        &empty_str,
+    );
+    license_item.setTarget(Some(&*handler));
+    menu.addItem(&license_item);
+
+    // Separator
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
 
     // Quit
     let quit_title = NSString::from_str("Quit");

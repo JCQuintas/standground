@@ -12,9 +12,9 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            artifact: standground-darwin-arm64.tar.gz
+            arch: arm64
           - target: x86_64-apple-darwin
-            artifact: standground-darwin-x86_64.tar.gz
+            arch: x86_64
     steps:
       - uses: actions/checkout@v4
 
@@ -26,17 +26,35 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Create archive
+      - name: Create standalone archive
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../${{ matrix.artifact }} standground
+          tar czf ../../../standground-darwin-${{ matrix.arch }}.tar.gz standground
           cd ../../..
 
-      - name: Upload artifact
+      - name: Create app bundle
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          APP_DIR="StandGround.app"
+          rm -rf "$APP_DIR"
+          mkdir -p "$APP_DIR/Contents/MacOS"
+          mkdir -p "$APP_DIR/Contents/Resources"
+          cp "target/${{ matrix.target }}/release/standground" "$APP_DIR/Contents/MacOS/standground"
+          cp Info.plist "$APP_DIR/Contents/Info.plist"
+          sed -i '' "s|<string>0\.1\.0</string>|<string>${VERSION}</string>|g" "$APP_DIR/Contents/Info.plist"
+          if [ -f assets/icon.svg ]; then
+            cp assets/icon.svg "$APP_DIR/Contents/Resources/icon.svg"
+          fi
+          DMG_NAME="StandGround-darwin-${{ matrix.arch }}.dmg"
+          hdiutil create -volname "StandGround" -srcfolder "$APP_DIR" -ov -format UDZO "$DMG_NAME"
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          name: build-${{ matrix.arch }}
+          path: |
+            standground-darwin-${{ matrix.arch }}.tar.gz
+            StandGround-darwin-${{ matrix.arch }}.dmg
 
   release:
     needs: build
@@ -59,4 +77,6 @@ jobs:
             --title "${{ github.ref_name }}" \
             --generate-notes \
             standground-darwin-arm64.tar.gz \
-            standground-darwin-x86_64.tar.gz
+            standground-darwin-x86_64.tar.gz \
+            StandGround-darwin-arm64.dmg \
+            StandGround-darwin-x86_64.dmg

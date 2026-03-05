@@ -274,8 +274,59 @@ fn parse_bounds(dict: core_foundation::base::CFTypeRef) -> Option<WindowBounds> 
 }
 
 /// Check Screen Recording permission without prompting.
+///
+/// `CGPreflightScreenCaptureAccess` is unreliable for `.app` bundles — it can
+/// return `false` even after the user has granted access.  A more dependable
+/// test is to actually request the window list and check whether macOS
+/// populates `kCGWindowName` for windows owned by other processes: that key is
+/// only present when Screen Recording access has been granted.
 pub fn check_screen_recording() -> bool {
-    unsafe { CGPreflightScreenCaptureAccess() }
+    // Fast path: the official API agrees we have access.
+    if unsafe { CGPreflightScreenCaptureAccess() } {
+        return true;
+    }
+
+    // Fallback: try to read a window name from another process.
+    unsafe {
+        let my_pid = std::process::id() as i64;
+        let option = kCGWindowListExcludeDesktopElements | kCGWindowListOptionAll;
+        let window_list_ref = CGWindowListCopyWindowInfo(option, 0);
+        if window_list_ref.is_null() {
+            return false;
+        }
+
+        let count = CFArrayGetCount(window_list_ref);
+        for i in 0..count {
+            let dict = CFArrayGetValueAtIndex(window_list_ref, i);
+            if dict.is_null() {
+                continue;
+            }
+
+            // Only check windows from *other* processes.
+            if let Some(pid) = cfdict_get_i64(dict, "kCGWindowOwnerPID") {
+                if pid == my_pid {
+                    continue;
+                }
+            }
+
+            // Layer 0 = normal windows — more likely to carry a name.
+            if cfdict_get_i64(dict, "kCGWindowLayer") != Some(0) {
+                continue;
+            }
+
+            // If we can read any non-empty window name the permission is granted.
+            if let Some(name) = cfdict_get_string(dict, "kCGWindowName") {
+                if !name.is_empty() {
+                    core_foundation::base::CFRelease(window_list_ref);
+                    return true;
+                }
+            }
+        }
+
+        core_foundation::base::CFRelease(window_list_ref);
+    }
+
+    false
 }
 
 /// Request Screen Recording permission.

@@ -495,8 +495,19 @@ unsafe fn build_menu(
     menu.addItem(&NSMenuItem::separatorItem(mtm));
 
     // Permission items (shown only when permissions are missing)
+    if !has_accessibility {
+        let title = NSString::from_str("Grant Accessibility");
+        let item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &title,
+            Some(sel!(requestAccessibility:)),
+            &empty_str,
+        );
+        item.setTarget(Some(&*handler));
+        menu.addItem(&item);
+    }
     if !has_screen_recording {
-        let title = NSString::from_str("Grant Screen Recording…");
+        let title = NSString::from_str("Grant Screen Recording");
         let item = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mtm),
             &title,
@@ -526,17 +537,6 @@ unsafe fn build_menu(
         );
         restart_item.setTarget(Some(&*handler));
         menu.addItem(&restart_item);
-    }
-    if !has_accessibility {
-        let title = NSString::from_str("Grant Accessibility…");
-        let item = NSMenuItem::initWithTitle_action_keyEquivalent(
-            NSMenuItem::alloc(mtm),
-            &title,
-            Some(sel!(requestAccessibility:)),
-            &empty_str,
-        );
-        item.setTarget(Some(&*handler));
-        menu.addItem(&item);
     }
     if !has_permissions {
         menu.addItem(&NSMenuItem::separatorItem(mtm));

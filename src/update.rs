@@ -121,6 +121,21 @@ pub fn apply_update(download_url: &str) -> Result<(), String> {
     let perms = fs::Permissions::from_mode(0o755);
     fs::set_permissions(&target, perms).map_err(|e| format!("Failed to set permissions: {e}"))?;
 
+    // Re-codesign the .app bundle so macOS TCC still recognises the app
+    // (ad-hoc signing ties permissions to the binary's cdhash — a new
+    // binary without re-signing invalidates all granted permissions).
+    if let Some(app_dir) = find_app_bundle(&current_exe) {
+        let status = Command::new("codesign")
+            .args(["--force", "--deep", "--sign", "-"])
+            .arg(&app_dir)
+            .status();
+        match status {
+            Ok(s) if s.success() => eprintln!("Re-signed {}", app_dir.display()),
+            Ok(s) => eprintln!("codesign exited with {s}"),
+            Err(e) => eprintln!("Failed to re-sign app bundle: {e}"),
+        }
+    }
+
     // Clean up
     let _ = fs::remove_dir_all(&temp_dir);
     let _ = fs::remove_file(&backup);
@@ -133,6 +148,20 @@ fn is_app_bundle(exe_path: &std::path::Path) -> bool {
         .parent()
         .map(|p| p.ends_with("Contents/MacOS"))
         .unwrap_or(false)
+}
+
+/// Walk up from the executable to find the `.app` bundle root.
+/// e.g. `/Applications/StandGround.app/Contents/MacOS/standground`
+///    → `/Applications/StandGround.app`
+fn find_app_bundle(exe_path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let macos_dir = exe_path.parent()?; // Contents/MacOS
+    let contents_dir = macos_dir.parent()?; // Contents
+    let app_dir = contents_dir.parent()?; // StandGround.app
+    if macos_dir.ends_with("Contents/MacOS") {
+        Some(app_dir.to_path_buf())
+    } else {
+        None
+    }
 }
 
 pub fn restart_app() -> ! {

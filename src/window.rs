@@ -39,9 +39,6 @@ extern "C" {
     ) -> core_foundation::base::CFTypeRef;
     fn CGPreflightScreenCaptureAccess() -> bool;
     fn CGRequestScreenCaptureAccess() -> bool;
-    fn CGMainDisplayID() -> u32;
-    fn CGDisplayCreateImage(display: u32) -> core_foundation::base::CFTypeRef;
-    fn CGImageRelease(image: core_foundation::base::CFTypeRef);
 
     // Private CGS APIs for Spaces
     fn CGSMainConnectionID() -> CGSConnectionID;
@@ -277,25 +274,8 @@ fn parse_bounds(dict: core_foundation::base::CFTypeRef) -> Option<WindowBounds> 
 }
 
 /// Check Screen Recording permission without prompting.
-///
-/// `CGPreflightScreenCaptureAccess` is unreliable for `.app` bundles, so
-/// we fall back to `CGDisplayCreateImage` which returns NULL when the app
-/// lacks Screen Recording access.
 pub fn check_screen_recording() -> bool {
-    if unsafe { CGPreflightScreenCaptureAccess() } {
-        return true;
-    }
-
-    // Fallback: actually attempt a screen capture.
-    unsafe {
-        let display_id = CGMainDisplayID();
-        let image = CGDisplayCreateImage(display_id);
-        if image.is_null() {
-            return false;
-        }
-        CGImageRelease(image);
-        true
-    }
+    unsafe { CGPreflightScreenCaptureAccess() }
 }
 
 /// Request Screen Recording permission.
@@ -534,9 +514,6 @@ pub fn set_window_position(pid: i64, window_id: u32, bounds: &WindowBounds) -> b
 }
 
 /// Check Accessibility permission without prompting.
-///
-/// `AXIsProcessTrustedWithOptions` can be unreliable for `.app` bundles,
-/// so we fall back to actually trying to query Finder's AX windows.
 pub fn check_accessibility() -> bool {
     unsafe {
         let key = CFString::new("AXTrustedCheckOptionPrompt");
@@ -545,45 +522,8 @@ pub fn check_accessibility() -> bool {
             key,
             value.as_CFType(),
         )]);
-        if AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef() as *const _) {
-            return true;
-        }
+        AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef() as *const _)
     }
-
-    // Fallback: try to read AX windows from Finder (always running, pid 1's child).
-    unsafe {
-        // Find Finder's PID via NSRunningApplication
-        use objc2_app_kit::NSRunningApplication;
-        use objc2_foundation::NSString as FoundationNSString;
-
-        let finder_bundle = FoundationNSString::from_str("com.apple.finder");
-        let apps = NSRunningApplication::runningApplicationsWithBundleIdentifier(&finder_bundle);
-        if apps.count() == 0 {
-            return false;
-        }
-        let finder_pid = apps.objectAtIndex(0).processIdentifier();
-
-        let app_ref = AXUIElementCreateApplication(finder_pid);
-        if app_ref.is_null() {
-            return false;
-        }
-
-        let windows_attr = CFString::new("AXWindows");
-        let mut windows_ref: core_foundation::base::CFTypeRef = std::ptr::null();
-        let err = AXUIElementCopyAttributeValue(
-            app_ref,
-            windows_attr.as_concrete_TypeRef() as *const _,
-            &mut windows_ref,
-        );
-        core_foundation::base::CFRelease(app_ref as *const _);
-
-        if err == 0 && !windows_ref.is_null() {
-            core_foundation::base::CFRelease(windows_ref);
-            return true;
-        }
-    }
-
-    false
 }
 
 /// Request Accessibility permission.

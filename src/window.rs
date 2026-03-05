@@ -534,6 +534,9 @@ pub fn set_window_position(pid: i64, window_id: u32, bounds: &WindowBounds) -> b
 }
 
 /// Check Accessibility permission without prompting.
+///
+/// `AXIsProcessTrustedWithOptions` can be unreliable for `.app` bundles,
+/// so we fall back to actually trying to query Finder's AX windows.
 pub fn check_accessibility() -> bool {
     unsafe {
         let key = CFString::new("AXTrustedCheckOptionPrompt");
@@ -542,8 +545,45 @@ pub fn check_accessibility() -> bool {
             key,
             value.as_CFType(),
         )]);
-        AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef() as *const _)
+        if AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef() as *const _) {
+            return true;
+        }
     }
+
+    // Fallback: try to read AX windows from Finder (always running, pid 1's child).
+    unsafe {
+        // Find Finder's PID via NSRunningApplication
+        use objc2_app_kit::NSRunningApplication;
+        use objc2_foundation::NSString as FoundationNSString;
+
+        let finder_bundle = FoundationNSString::from_str("com.apple.finder");
+        let apps = NSRunningApplication::runningApplicationsWithBundleIdentifier(&finder_bundle);
+        if apps.count() == 0 {
+            return false;
+        }
+        let finder_pid = apps.objectAtIndex(0).processIdentifier();
+
+        let app_ref = AXUIElementCreateApplication(finder_pid);
+        if app_ref.is_null() {
+            return false;
+        }
+
+        let windows_attr = CFString::new("AXWindows");
+        let mut windows_ref: core_foundation::base::CFTypeRef = std::ptr::null();
+        let err = AXUIElementCopyAttributeValue(
+            app_ref,
+            windows_attr.as_concrete_TypeRef() as *const _,
+            &mut windows_ref,
+        );
+        core_foundation::base::CFRelease(app_ref as *const _);
+
+        if err == 0 && !windows_ref.is_null() {
+            core_foundation::base::CFRelease(windows_ref);
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Request Accessibility permission.

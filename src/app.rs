@@ -5,10 +5,10 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, sel, AnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSImage, NSMenu, NSMenuItem, NSStatusBar,
-    NSStatusItem,
+    NSApplication, NSApplicationActivationPolicy, NSBezierPath, NSColor, NSImage, NSMenu,
+    NSMenuItem, NSStatusBar, NSStatusItem, NSView,
 };
-use objc2_foundation::{NSData, NSObject, NSSize, NSString};
+use objc2_foundation::{NSData, NSObject, NSPoint, NSRect, NSSize, NSString};
 
 use crate::config::AppConfig;
 use crate::display::{register_display_callback, DisplayEvent};
@@ -204,9 +204,19 @@ define_class!(
             }
         }
 
-        #[unsafe(method(requestPermissions:))]
-        fn request_permissions(&self, _sender: &AnyObject) {
-            request_permissions_sequentially();
+        #[unsafe(method(requestScreenRecording:))]
+        fn request_screen_recording(&self, _sender: &AnyObject) {
+            window::request_screen_recording();
+        }
+
+        #[unsafe(method(requestAccessibility:))]
+        fn request_accessibility(&self, _sender: &AnyObject) {
+            window::request_accessibility();
+        }
+
+        #[unsafe(method(restartApp:))]
+        fn restart_app(&self, _sender: &AnyObject) {
+            crate::update::restart_app();
         }
 
         #[unsafe(method(quitApp:))]
@@ -294,20 +304,6 @@ define_class!(
     }
 );
 
-/// Request permissions sequentially: Screen Recording first (non-blocking prompt),
-/// wait for it, then Accessibility (blocking modal).
-/// Must be called from the main thread so the system prompts appear.
-fn request_permissions_sequentially() {
-    if !window::check_screen_recording() {
-        window::request_screen_recording();
-        eprintln!("Screen Recording access not yet granted. Please grant access in System Settings > Privacy & Security > Screen Recording.");
-    }
-    if !window::check_accessibility() {
-        window::request_accessibility();
-        eprintln!("Accessibility access not yet granted. Please grant access in System Settings > Privacy & Security > Accessibility.");
-    }
-}
-
 pub fn run() {
     let mtm = MainThreadMarker::new().expect("must be called from the main thread");
 
@@ -315,10 +311,17 @@ pub fn run() {
         let app = NSApplication::sharedApplication(mtm);
         app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
-        // Check and request permissions (must run on main thread for prompts to appear)
-        request_permissions_sequentially();
+        // Check and prompt for permissions on startup
         let has_screen_recording = window::check_screen_recording();
         let has_accessibility = window::check_accessibility();
+        if !has_screen_recording {
+            window::request_screen_recording();
+            eprintln!("Screen Recording access not yet granted. Please grant access in System Settings > Privacy & Security > Screen Recording.");
+        }
+        if !has_accessibility {
+            window::request_accessibility();
+            eprintln!("Accessibility access not yet granted. Please grant access in System Settings > Privacy & Security > Accessibility.");
+        }
 
         // Load persisted state
         let mut config = storage::load_config();
@@ -351,15 +354,17 @@ pub fn run() {
         if let Some(button) = status_item.button(mtm) {
             button.setImage(Some(&icon_image));
         }
+        let has_permissions = has_screen_recording && has_accessibility;
+        update_warning_dot(&status_item, !has_permissions, mtm);
 
         // Build menu
-        let has_permissions = has_screen_recording && has_accessibility;
         let menu = build_menu(
             config.auto_restore,
             config.launch_at_login,
             config.auto_update,
             &None,
-            has_permissions,
+            has_screen_recording,
+            has_accessibility,
             mtm,
         );
         status_item.setMenu(Some(&menu));
@@ -411,18 +416,69 @@ pub fn run() {
     }
 }
 
+const DOT_SIZE: f64 = 8.0;
+
+define_class!(
+    #[unsafe(super(NSView))]
+    #[name = "WarningDotView"]
+    struct WarningDotView;
+
+    impl WarningDotView {
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, _dirty_rect: NSRect) {
+            let bounds = self.bounds();
+            let color = NSColor::systemRedColor();
+            color.setFill();
+            let dot = NSBezierPath::bezierPathWithOvalInRect(bounds);
+            dot.fill();
+        }
+    }
+);
+
+/// Add or remove the warning dot on the status bar button.
+unsafe fn update_warning_dot(status_item: &NSStatusItem, show: bool, mtm: MainThreadMarker) {
+    if let Some(button) = status_item.button(mtm) {
+        // Remove existing dot if any
+        let cls = objc2::runtime::AnyClass::get(c"WarningDotView");
+        for subview in button.subviews().iter() {
+            if let Some(cls) = cls {
+                let is_dot: bool = msg_send![&*subview, isKindOfClass: cls];
+                if is_dot {
+                    subview.removeFromSuperview();
+                }
+            }
+        }
+
+        if show {
+            let button_bounds = button.bounds();
+            let dot_frame = NSRect::new(
+                NSPoint::new(
+                    button_bounds.size.width - DOT_SIZE,
+                    button_bounds.size.height - DOT_SIZE,
+                ),
+                NSSize::new(DOT_SIZE, DOT_SIZE),
+            );
+            let dot_view: Retained<WarningDotView> =
+                msg_send![WarningDotView::alloc(mtm), initWithFrame: dot_frame];
+            button.addSubview(&dot_view);
+        }
+    }
+}
+
 unsafe fn build_menu(
     auto_restore: bool,
     launch_at_login: bool,
     auto_update: bool,
     update_info: &Option<UpdateInfo>,
-    has_permissions: bool,
+    has_screen_recording: bool,
+    has_accessibility: bool,
     mtm: MainThreadMarker,
 ) -> Retained<NSMenu> {
     let menu = NSMenu::new(mtm);
     menu.setAutoenablesItems(false);
     let handler: Retained<StandGroundHandler> = msg_send![StandGroundHandler::alloc(), init];
     let empty_str = NSString::from_str("");
+    let has_permissions = has_screen_recording && has_accessibility;
 
     // Version header (disabled, just for display)
     let version_text = format!("StandGround v{}", crate::VERSION);
@@ -439,18 +495,51 @@ unsafe fn build_menu(
     // Separator
     menu.addItem(&NSMenuItem::separatorItem(mtm));
 
-    // Request Permissions (shown only when permissions are missing)
-    if !has_permissions {
-        let perm_title = NSString::from_str("Grant Permissions…");
-        let perm_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+    // Permission items (shown only when permissions are missing)
+    if !has_screen_recording {
+        let title = NSString::from_str("Grant Screen Recording…");
+        let item = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mtm),
-            &perm_title,
-            Some(sel!(requestPermissions:)),
+            &title,
+            Some(sel!(requestScreenRecording:)),
             &empty_str,
         );
-        perm_item.setTarget(Some(&*handler));
-        menu.addItem(&perm_item);
+        item.setTarget(Some(&*handler));
+        menu.addItem(&item);
 
+        // Screen Recording requires a restart to take effect
+        let hint_title = NSString::from_str("Restart required after granting");
+        let hint_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &hint_title,
+            None,
+            &empty_str,
+        );
+        hint_item.setEnabled(false);
+        menu.addItem(&hint_item);
+
+        let restart_title = NSString::from_str("Restart App");
+        let restart_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &restart_title,
+            Some(sel!(restartApp:)),
+            &empty_str,
+        );
+        restart_item.setTarget(Some(&*handler));
+        menu.addItem(&restart_item);
+    }
+    if !has_accessibility {
+        let title = NSString::from_str("Grant Accessibility…");
+        let item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &title,
+            Some(sel!(requestAccessibility:)),
+            &empty_str,
+        );
+        item.setTarget(Some(&*handler));
+        menu.addItem(&item);
+    }
+    if !has_permissions {
         menu.addItem(&NSMenuItem::separatorItem(mtm));
     }
 
@@ -601,14 +690,18 @@ unsafe fn build_menu(
 }
 
 unsafe fn rebuild_menu(state: &AppState) {
-    let has_permissions = state.has_screen_recording && state.has_accessibility;
     let menu = build_menu(
         state.config.auto_restore,
         state.config.launch_at_login,
         state.config.auto_update,
         &state.update_info,
-        has_permissions,
+        state.has_screen_recording,
+        state.has_accessibility,
         state.mtm,
     );
     state.status_item.setMenu(Some(&menu));
+
+    // Update warning dot based on permission state
+    let has_permissions = state.has_screen_recording && state.has_accessibility;
+    update_warning_dot(&state.status_item, !has_permissions, state.mtm);
 }

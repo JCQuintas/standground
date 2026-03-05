@@ -39,6 +39,9 @@ extern "C" {
     ) -> core_foundation::base::CFTypeRef;
     fn CGPreflightScreenCaptureAccess() -> bool;
     fn CGRequestScreenCaptureAccess() -> bool;
+    fn CGMainDisplayID() -> u32;
+    fn CGDisplayCreateImage(display: u32) -> core_foundation::base::CFTypeRef;
+    fn CGImageRelease(image: core_foundation::base::CFTypeRef);
 
     // Private CGS APIs for Spaces
     fn CGSMainConnectionID() -> CGSConnectionID;
@@ -275,58 +278,24 @@ fn parse_bounds(dict: core_foundation::base::CFTypeRef) -> Option<WindowBounds> 
 
 /// Check Screen Recording permission without prompting.
 ///
-/// `CGPreflightScreenCaptureAccess` is unreliable for `.app` bundles — it can
-/// return `false` even after the user has granted access.  A more dependable
-/// test is to actually request the window list and check whether macOS
-/// populates `kCGWindowName` for windows owned by other processes: that key is
-/// only present when Screen Recording access has been granted.
+/// `CGPreflightScreenCaptureAccess` is unreliable for `.app` bundles, so
+/// we fall back to `CGDisplayCreateImage` which returns NULL when the app
+/// lacks Screen Recording access.
 pub fn check_screen_recording() -> bool {
-    // Fast path: the official API agrees we have access.
     if unsafe { CGPreflightScreenCaptureAccess() } {
         return true;
     }
 
-    // Fallback: try to read a window name from another process.
+    // Fallback: actually attempt a screen capture.
     unsafe {
-        let my_pid = std::process::id() as i64;
-        let option = kCGWindowListExcludeDesktopElements | kCGWindowListOptionAll;
-        let window_list_ref = CGWindowListCopyWindowInfo(option, 0);
-        if window_list_ref.is_null() {
+        let display_id = CGMainDisplayID();
+        let image = CGDisplayCreateImage(display_id);
+        if image.is_null() {
             return false;
         }
-
-        let count = CFArrayGetCount(window_list_ref);
-        for i in 0..count {
-            let dict = CFArrayGetValueAtIndex(window_list_ref, i);
-            if dict.is_null() {
-                continue;
-            }
-
-            // Only check windows from *other* processes.
-            if let Some(pid) = cfdict_get_i64(dict, "kCGWindowOwnerPID") {
-                if pid == my_pid {
-                    continue;
-                }
-            }
-
-            // Layer 0 = normal windows — more likely to carry a name.
-            if cfdict_get_i64(dict, "kCGWindowLayer") != Some(0) {
-                continue;
-            }
-
-            // Without Screen Recording the key is entirely absent from
-            // the dictionary.  Its mere presence (even if the value is an
-            // empty string) proves we have the permission.
-            if cfdict_get_raw(dict, "kCGWindowName").is_some() {
-                core_foundation::base::CFRelease(window_list_ref);
-                return true;
-            }
-        }
-
-        core_foundation::base::CFRelease(window_list_ref);
+        CGImageRelease(image);
+        true
     }
-
-    false
 }
 
 /// Request Screen Recording permission.

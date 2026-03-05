@@ -314,12 +314,12 @@ pub fn check_screen_recording() -> bool {
                 continue;
             }
 
-            // If we can read any non-empty window name the permission is granted.
-            if let Some(name) = cfdict_get_string(dict, "kCGWindowName") {
-                if !name.is_empty() {
-                    core_foundation::base::CFRelease(window_list_ref);
-                    return true;
-                }
+            // Without Screen Recording the key is entirely absent from
+            // the dictionary.  Its mere presence (even if the value is an
+            // empty string) proves we have the permission.
+            if cfdict_get_raw(dict, "kCGWindowName").is_some() {
+                core_foundation::base::CFRelease(window_list_ref);
+                return true;
             }
         }
 

@@ -311,15 +311,14 @@ pub fn run() {
         let app = NSApplication::sharedApplication(mtm);
         app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
-        // Check and prompt for permissions on startup
+        // Check permissions on startup (don't auto-open System Settings —
+        // the warning dot and menu items let the user grant access when ready).
         let has_screen_recording = window::check_screen_recording();
         let has_accessibility = window::check_accessibility();
         if !has_screen_recording {
-            window::request_screen_recording();
             eprintln!("Screen Recording access not yet granted. Please grant access in System Settings > Privacy & Security > Screen Recording.");
         }
         if !has_accessibility {
-            window::request_accessibility();
             eprintln!("Accessibility access not yet granted. Please grant access in System Settings > Privacy & Security > Accessibility.");
         }
 

@@ -46,6 +46,11 @@ jobs:
           CERTIFICATE_P12: ${{ secrets.CERTIFICATE_P12 }}
           CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
         run: |
+          if [ -z "$CERTIFICATE_P12" ]; then
+            echo "No signing certificate configured, will use ad-hoc signing"
+            exit 0
+          fi
+
           KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
 

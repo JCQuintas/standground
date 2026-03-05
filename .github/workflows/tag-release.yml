@@ -32,3 +32,4 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ needs.tag.outputs.version }}
+    secrets: inherit

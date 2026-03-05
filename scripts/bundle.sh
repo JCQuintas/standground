@@ -31,8 +31,14 @@ fi
 # Copy icon
 cp "$PROJECT_DIR/assets/icon.icns" "$APP_DIR/Contents/Resources/icon.icns"
 
-# Ad-hoc sign so macOS doesn't reject the app as "damaged"
-codesign --force --deep --sign - "$APP_DIR"
+# Sign the app bundle. Prefer the self-signed "StandGround Dev" certificate
+# (stable identity — TCC permissions survive rebuilds). Falls back to ad-hoc.
+SIGN_IDENTITY="-"
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "StandGround Dev"; then
+    SIGN_IDENTITY="StandGround Dev"
+fi
+codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_DIR"
+echo "Signed with: $SIGN_IDENTITY"
 
 echo ""
 echo "App bundle created: $APP_DIR"

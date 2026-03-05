@@ -33,17 +33,27 @@ pub fn check_for_update(current_version: &str) -> Result<Option<UpdateInfo>, Str
         return Ok(None);
     }
 
-    // Determine the right asset for the current architecture
     let arch_suffix = match std::env::consts::ARCH {
         "aarch64" => "arm64",
         "x86_64" => "x86_64",
         other => return Err(format!("Unsupported architecture: {other}")),
     };
-    let expected_name = format!("standground-darwin-{arch_suffix}.tar.gz");
 
     let assets = body["assets"]
         .as_array()
         .ok_or("Missing assets in response")?;
+
+    // .app bundles download the DMG (preserves code signature / TCC permissions).
+    // Standalone installs download the bare binary tarball.
+    let current_exe =
+        std::env::current_exe().map_err(|e| format!("Failed to get current exe: {e}"))?;
+    let use_dmg = is_app_bundle(&current_exe);
+
+    let expected_name = if use_dmg {
+        format!("StandGround-darwin-{arch_suffix}.dmg")
+    } else {
+        format!("standground-darwin-{arch_suffix}.tar.gz")
+    };
 
     let download_url = assets
         .iter()
@@ -67,13 +77,126 @@ fn is_newer(latest: &str, current: &str) -> bool {
 }
 
 pub fn apply_update(download_url: &str) -> Result<(), String> {
+    let current_exe =
+        std::env::current_exe().map_err(|e| format!("Failed to get current exe: {e}"))?;
+
+    if is_app_bundle(&current_exe) {
+        apply_dmg_update(download_url, &current_exe)
+    } else {
+        apply_binary_update(download_url, &current_exe)
+    }
+}
+
+/// Download the DMG, mount it, and replace the current .app bundle with the
+/// new signed one. Preserves the code signature so TCC permissions survive.
+fn apply_dmg_update(
+    download_url: &str,
+    current_exe: &std::path::Path,
+) -> Result<(), String> {
+    let temp_dir = std::env::temp_dir().join("standground-update");
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temp dir: {e}"))?;
+
+    let dmg_path = temp_dir.join("update.dmg");
+
+    // Download
+    let mut response = ureq::get(download_url)
+        .header("User-Agent", &format!("standground/{}", crate::VERSION))
+        .call()
+        .map_err(|e| format!("Failed to download update: {e}"))?;
+
+    let mut file =
+        fs::File::create(&dmg_path).map_err(|e| format!("Failed to create DMG file: {e}"))?;
+    std::io::copy(&mut response.body_mut().as_reader(), &mut file)
+        .map_err(|e| format!("Failed to write DMG: {e}"))?;
+    drop(file);
+
+    // Mount
+    let mount_point = temp_dir.join("mount");
+    fs::create_dir_all(&mount_point)
+        .map_err(|e| format!("Failed to create mount point: {e}"))?;
+
+    let output = Command::new("hdiutil")
+        .args([
+            "attach",
+            dmg_path.to_str().unwrap(),
+            "-mountpoint",
+            mount_point.to_str().unwrap(),
+            "-nobrowse",
+            "-quiet",
+        ])
+        .output()
+        .map_err(|e| format!("Failed to mount DMG: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("hdiutil attach failed: {stderr}"));
+    }
+
+    let detach = |mp: &std::path::Path| {
+        let _ = Command::new("hdiutil")
+            .args(["detach", mp.to_str().unwrap(), "-quiet"])
+            .status();
+    };
+
+    // Locate the new .app inside the DMG
+    let new_app = mount_point.join("StandGround.app");
+    if !new_app.exists() {
+        detach(&mount_point);
+        return Err("StandGround.app not found in DMG".to_string());
+    }
+
+    // Locate the current .app bundle
+    let current_app = find_app_bundle(current_exe).ok_or_else(|| {
+        detach(&mount_point);
+        "Not running from an .app bundle".to_string()
+    })?;
+
+    // Swap: backup current, copy new, clean up
+    let backup = current_app.with_extension("app.bak");
+    let _ = fs::remove_dir_all(&backup);
+
+    fs::rename(&current_app, &backup).map_err(|e| {
+        detach(&mount_point);
+        format!("Failed to backup current app: {e}")
+    })?;
+
+    // cp -R preserves the code signature
+    let status = Command::new("cp")
+        .args(["-R"])
+        .arg(&new_app)
+        .arg(&current_app)
+        .status()
+        .map_err(|e| {
+            let _ = fs::rename(&backup, &current_app);
+            detach(&mount_point);
+            format!("Failed to copy new app: {e}")
+        })?;
+
+    if !status.success() {
+        let _ = fs::rename(&backup, &current_app);
+        detach(&mount_point);
+        return Err("Failed to copy new .app bundle".to_string());
+    }
+
+    let _ = fs::remove_dir_all(&backup);
+    detach(&mount_point);
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    Ok(())
+}
+
+/// Download a tarball and replace the standalone binary.
+fn apply_binary_update(
+    download_url: &str,
+    current_exe: &std::path::Path,
+) -> Result<(), String> {
     let temp_dir = std::env::temp_dir().join("standground-update");
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temp dir: {e}"))?;
 
     let archive_path = temp_dir.join("update.tar.gz");
 
-    // Download the archive
     let mut response = ureq::get(download_url)
         .header("User-Agent", &format!("standground/{}", crate::VERSION))
         .call()
@@ -84,7 +207,6 @@ pub fn apply_update(download_url: &str) -> Result<(), String> {
     std::io::copy(&mut response.body_mut().as_reader(), &mut file)
         .map_err(|e| format!("Failed to write archive: {e}"))?;
 
-    // Extract the binary
     let status = Command::new("tar")
         .args(["xzf", archive_path.to_str().unwrap()])
         .current_dir(&temp_dir)
@@ -100,43 +222,17 @@ pub fn apply_update(download_url: &str) -> Result<(), String> {
         return Err("Extracted binary not found".to_string());
     }
 
-    // Determine where to place the new binary
-    let current_exe =
-        std::env::current_exe().map_err(|e| format!("Failed to get current exe: {e}"))?;
+    let backup = current_exe.with_extension("bak");
+    let _ = fs::remove_file(&backup);
+    fs::rename(current_exe, &backup)
+        .map_err(|e| format!("Failed to backup current binary: {e}"))?;
+    fs::copy(&new_binary, current_exe)
+        .map_err(|e| format!("Failed to install new binary: {e}"))?;
 
-    let target = if is_app_bundle(&current_exe) {
-        // Running from .app bundle — replace the binary inside Contents/MacOS/
-        current_exe.clone()
-    } else {
-        current_exe.clone()
-    };
-
-    // Replace: rename old binary to .bak, move new one in
-    let backup = target.with_extension("bak");
-    let _ = fs::remove_file(&backup); // remove old backup if it exists
-    fs::rename(&target, &backup).map_err(|e| format!("Failed to backup current binary: {e}"))?;
-    fs::copy(&new_binary, &target).map_err(|e| format!("Failed to install new binary: {e}"))?;
-
-    // Ensure executable permissions
     let perms = fs::Permissions::from_mode(0o755);
-    fs::set_permissions(&target, perms).map_err(|e| format!("Failed to set permissions: {e}"))?;
+    fs::set_permissions(current_exe, perms)
+        .map_err(|e| format!("Failed to set permissions: {e}"))?;
 
-    // Re-codesign the .app bundle so macOS TCC still recognises the app
-    // (ad-hoc signing ties permissions to the binary's cdhash — a new
-    // binary without re-signing invalidates all granted permissions).
-    if let Some(app_dir) = find_app_bundle(&current_exe) {
-        let status = Command::new("codesign")
-            .args(["--force", "--deep", "--sign", "-"])
-            .arg(&app_dir)
-            .status();
-        match status {
-            Ok(s) if s.success() => eprintln!("Re-signed {}", app_dir.display()),
-            Ok(s) => eprintln!("codesign exited with {s}"),
-            Err(e) => eprintln!("Failed to re-sign app bundle: {e}"),
-        }
-    }
-
-    // Clean up
     let _ = fs::remove_dir_all(&temp_dir);
     let _ = fs::remove_file(&backup);
 
@@ -151,12 +247,10 @@ fn is_app_bundle(exe_path: &std::path::Path) -> bool {
 }
 
 /// Walk up from the executable to find the `.app` bundle root.
-/// e.g. `/Applications/StandGround.app/Contents/MacOS/standground`
-///    → `/Applications/StandGround.app`
 fn find_app_bundle(exe_path: &std::path::Path) -> Option<std::path::PathBuf> {
-    let macos_dir = exe_path.parent()?; // Contents/MacOS
-    let contents_dir = macos_dir.parent()?; // Contents
-    let app_dir = contents_dir.parent()?; // StandGround.app
+    let macos_dir = exe_path.parent()?;
+    let contents_dir = macos_dir.parent()?;
+    let app_dir = contents_dir.parent()?;
     if macos_dir.ends_with("Contents/MacOS") {
         Some(app_dir.to_path_buf())
     } else {
@@ -167,7 +261,6 @@ fn find_app_bundle(exe_path: &std::path::Path) -> Option<std::path::PathBuf> {
 pub fn restart_app() -> ! {
     let exe = std::env::current_exe().expect("Failed to get current exe for restart");
     let mut args: Vec<String> = std::env::args().collect();
-    // Remove the program name (first arg)
     if !args.is_empty() {
         args.remove(0);
     }
@@ -177,7 +270,6 @@ pub fn restart_app() -> ! {
         .spawn()
         .expect("Failed to restart app");
 
-    // Terminate current process
     unsafe {
         use objc2::MainThreadMarker;
         use objc2_app_kit::NSApplication;
@@ -187,6 +279,5 @@ pub fn restart_app() -> ! {
         app.terminate(None);
     }
 
-    // Fallback if NSApp terminate doesn't exit
     std::process::exit(0);
 }

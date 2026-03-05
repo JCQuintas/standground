@@ -41,6 +41,34 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Import signing certificate
+        env:
+          CERTIFICATE_P12: ${{ secrets.CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+
+          # Create a temporary keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Import certificate
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          echo "$CERTIFICATE_P12" | base64 --decode > "$CERT_PATH"
+          security import "$CERT_PATH" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          rm "$CERT_PATH"
+
+          # Allow codesign to use the keychain without prompting
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Add temporary keychain to the search list
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
@@ -51,6 +79,8 @@ jobs:
           cd ../../..
 
       - name: Create app bundle
+        env:
+          SIGN_IDENTITY: ${{ secrets.SIGN_IDENTITY }}
         run: |
           VERSION="${RELEASE_TAG#v}"
           APP_DIR="StandGround.app"
@@ -61,7 +91,12 @@ jobs:
           cp Info.plist "$APP_DIR/Contents/Info.plist"
           sed -i '' "s|<string>0\.1\.0</string>|<string>${VERSION}</string>|g" "$APP_DIR/Contents/Info.plist"
           cp assets/icon.icns "$APP_DIR/Contents/Resources/icon.icns"
-          codesign --force --deep --sign - "$APP_DIR"
+
+          # Sign with the imported certificate (falls back to ad-hoc if secret not set)
+          IDENTITY="${SIGN_IDENTITY:--}"
+          codesign --force --deep --sign "$IDENTITY" "$APP_DIR"
+          echo "Signed with: $IDENTITY"
+
           DMG_NAME="StandGround-darwin-${{ matrix.arch }}.dmg"
           DMG_STAGING="dmg-staging"
           rm -rf "$DMG_STAGING"

@@ -37,8 +37,6 @@ extern "C" {
         option: u32,
         relative_to_window: u32,
     ) -> core_foundation::base::CFTypeRef;
-    fn CGPreflightScreenCaptureAccess() -> bool;
-    fn CGRequestScreenCaptureAccess() -> bool;
 
     // Private CGS APIs for Spaces
     fn CGSMainConnectionID() -> CGSConnectionID;
@@ -271,21 +269,6 @@ fn parse_bounds(dict: core_foundation::base::CFTypeRef) -> Option<WindowBounds> 
             height: h,
         })
     }
-}
-
-/// Check Screen Recording permission without prompting.
-pub fn check_screen_recording() -> bool {
-    unsafe { CGPreflightScreenCaptureAccess() }
-}
-
-/// Request Screen Recording permission.
-/// Calls the system API to register the app, then opens System Settings
-/// to the Screen Recording pane so the user can grant access.
-pub fn request_screen_recording() {
-    unsafe { CGRequestScreenCaptureAccess(); }
-    let _ = std::process::Command::new("open")
-        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
-        .spawn();
 }
 
 pub fn enumerate_windows() -> Vec<WindowInfo> {

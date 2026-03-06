@@ -30,7 +30,6 @@ struct AppState {
     update_rx: mpsc::Receiver<Option<UpdateInfo>>,
     update_tx: mpsc::Sender<Option<UpdateInfo>>,
     mtm: MainThreadMarker,
-    has_screen_recording: bool,
     has_accessibility: bool,
 }
 
@@ -204,19 +203,9 @@ define_class!(
             }
         }
 
-        #[unsafe(method(requestScreenRecording:))]
-        fn request_screen_recording(&self, _sender: &AnyObject) {
-            window::request_screen_recording();
-        }
-
         #[unsafe(method(requestAccessibility:))]
         fn request_accessibility(&self, _sender: &AnyObject) {
             window::request_accessibility();
-        }
-
-        #[unsafe(method(restartApp:))]
-        fn restart_app(&self, _sender: &AnyObject) {
-            crate::update::restart_app();
         }
 
         #[unsafe(method(quitApp:))]
@@ -264,12 +253,10 @@ define_class!(
                         }
                     }
 
-                    // Poll permission state and rebuild menu if changed
-                    if !state.has_screen_recording || !state.has_accessibility {
-                        let sr = window::check_screen_recording();
+                    // Poll accessibility permission and rebuild menu if changed
+                    if !state.has_accessibility {
                         let ax = window::check_accessibility();
-                        if sr != state.has_screen_recording || ax != state.has_accessibility {
-                            state.has_screen_recording = sr;
+                        if ax != state.has_accessibility {
                             state.has_accessibility = ax;
                             rebuild_menu(state);
                         }
@@ -313,11 +300,7 @@ pub fn run() {
 
         // Check permissions on startup (don't auto-open System Settings —
         // the warning dot and menu items let the user grant access when ready).
-        let has_screen_recording = window::check_screen_recording();
         let has_accessibility = window::check_accessibility();
-        if !has_screen_recording {
-            eprintln!("Screen Recording access not yet granted. Please grant access in System Settings > Privacy & Security > Screen Recording.");
-        }
         if !has_accessibility {
             eprintln!("Accessibility access not yet granted. Please grant access in System Settings > Privacy & Security > Accessibility.");
         }
@@ -353,8 +336,7 @@ pub fn run() {
         if let Some(button) = status_item.button(mtm) {
             button.setImage(Some(&icon_image));
         }
-        let has_permissions = has_screen_recording && has_accessibility;
-        update_warning_dot(&status_item, !has_permissions, mtm);
+        update_warning_dot(&status_item, !has_accessibility, mtm);
 
         // Build menu
         let menu = build_menu(
@@ -362,7 +344,6 @@ pub fn run() {
             config.launch_at_login,
             config.auto_update,
             &None,
-            has_screen_recording,
             has_accessibility,
             mtm,
         );
@@ -395,7 +376,6 @@ pub fn run() {
             update_rx,
             update_tx,
             mtm,
-            has_screen_recording,
             has_accessibility,
         });
         APP_STATE = Some(Box::into_raw(state));
@@ -469,7 +449,6 @@ unsafe fn build_menu(
     launch_at_login: bool,
     auto_update: bool,
     update_info: &Option<UpdateInfo>,
-    has_screen_recording: bool,
     has_accessibility: bool,
     mtm: MainThreadMarker,
 ) -> Retained<NSMenu> {
@@ -477,7 +456,6 @@ unsafe fn build_menu(
     menu.setAutoenablesItems(false);
     let handler: Retained<StandGroundHandler> = msg_send![StandGroundHandler::alloc(), init];
     let empty_str = NSString::from_str("");
-    let has_permissions = has_screen_recording && has_accessibility;
 
     // Version header (disabled, just for display)
     let version_text = format!("StandGround v{}", crate::VERSION);
@@ -505,40 +483,6 @@ unsafe fn build_menu(
         );
         item.setTarget(Some(&*handler));
         menu.addItem(&item);
-    }
-    if !has_screen_recording {
-        let title = NSString::from_str("Grant Screen Recording");
-        let item = NSMenuItem::initWithTitle_action_keyEquivalent(
-            NSMenuItem::alloc(mtm),
-            &title,
-            Some(sel!(requestScreenRecording:)),
-            &empty_str,
-        );
-        item.setTarget(Some(&*handler));
-        menu.addItem(&item);
-
-        // Screen Recording requires a restart to take effect
-        let hint_title = NSString::from_str("Restart required after granting");
-        let hint_item = NSMenuItem::initWithTitle_action_keyEquivalent(
-            NSMenuItem::alloc(mtm),
-            &hint_title,
-            None,
-            &empty_str,
-        );
-        hint_item.setEnabled(false);
-        menu.addItem(&hint_item);
-
-        let restart_title = NSString::from_str("Restart App");
-        let restart_item = NSMenuItem::initWithTitle_action_keyEquivalent(
-            NSMenuItem::alloc(mtm),
-            &restart_title,
-            Some(sel!(restartApp:)),
-            &empty_str,
-        );
-        restart_item.setTarget(Some(&*handler));
-        menu.addItem(&restart_item);
-    }
-    if !has_permissions {
         menu.addItem(&NSMenuItem::separatorItem(mtm));
     }
 
@@ -551,7 +495,7 @@ unsafe fn build_menu(
         &empty_str,
     );
     save_item.setTarget(Some(&*handler));
-    save_item.setEnabled(has_permissions);
+    save_item.setEnabled(has_accessibility);
     menu.addItem(&save_item);
 
     // Restore Layout
@@ -563,7 +507,7 @@ unsafe fn build_menu(
         &empty_str,
     );
     restore_item.setTarget(Some(&*handler));
-    restore_item.setEnabled(has_permissions);
+    restore_item.setEnabled(has_accessibility);
     menu.addItem(&restore_item);
 
     // Separator
@@ -694,13 +638,11 @@ unsafe fn rebuild_menu(state: &AppState) {
         state.config.launch_at_login,
         state.config.auto_update,
         &state.update_info,
-        state.has_screen_recording,
         state.has_accessibility,
         state.mtm,
     );
     state.status_item.setMenu(Some(&menu));
 
-    // Update warning dot based on permission state
-    let has_permissions = state.has_screen_recording && state.has_accessibility;
-    update_warning_dot(&state.status_item, !has_permissions, state.mtm);
+    // Update warning dot based on accessibility permission
+    update_warning_dot(&state.status_item, !state.has_accessibility, state.mtm);
 }

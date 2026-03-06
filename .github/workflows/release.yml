@@ -80,8 +80,13 @@ jobs:
       - name: Create standalone archive
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../standground-darwin-${{ matrix.arch }}.tar.gz standground
+          tar czf ../../../standground-darwin-${{ matrix.arch }}.tar.gz standground libstandground_core.dylib
           cd ../../..
+
+      - name: Copy dylib update artifact
+        run: |
+          cp "target/${{ matrix.target }}/release/libstandground_core.dylib" \
+            "libstandground_core-darwin-${{ matrix.arch }}.dylib"
 
       - name: Create app bundle
         env:
@@ -93,6 +98,7 @@ jobs:
           mkdir -p "$APP_DIR/Contents/MacOS"
           mkdir -p "$APP_DIR/Contents/Resources"
           cp "target/${{ matrix.target }}/release/standground" "$APP_DIR/Contents/MacOS/standground"
+          cp "target/${{ matrix.target }}/release/libstandground_core.dylib" "$APP_DIR/Contents/Resources/libstandground_core.dylib"
           cp Info.plist "$APP_DIR/Contents/Info.plist"
           sed -i '' "s|<string>0\.1\.0</string>|<string>${VERSION}</string>|g" "$APP_DIR/Contents/Info.plist"
           cp assets/icon.icns "$APP_DIR/Contents/Resources/icon.icns"
@@ -117,6 +123,7 @@ jobs:
           path: |
             standground-darwin-${{ matrix.arch }}.tar.gz
             StandGround-darwin-${{ matrix.arch }}.dmg
+            libstandground_core-darwin-${{ matrix.arch }}.dylib
 
   release:
     needs: build
@@ -144,4 +151,6 @@ jobs:
             standground-darwin-arm64.tar.gz \
             standground-darwin-x86_64.tar.gz \
             StandGround-darwin-arm64.dmg \
-            StandGround-darwin-x86_64.dmg
+            StandGround-darwin-x86_64.dmg \
+            libstandground_core-darwin-arm64.dylib \
+            libstandground_core-darwin-x86_64.dylib

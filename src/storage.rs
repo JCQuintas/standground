@@ -7,7 +7,7 @@ use directories::ProjectDirs;
 use crate::config::AppConfig;
 use crate::layout::LayoutStore;
 
-fn data_dir() -> io::Result<PathBuf> {
+pub(crate) fn data_dir() -> io::Result<PathBuf> {
     let proj = ProjectDirs::from("com", "standground", "standground").ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,

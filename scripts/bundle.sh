@@ -16,8 +16,11 @@ rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS"
 mkdir -p "$APP_DIR/Contents/Resources"
 
-# Copy binary
+# Copy shim binary
 cp "$PROJECT_DIR/target/release/standground" "$APP_DIR/Contents/MacOS/standground"
+
+# Copy core dylib into Resources (fallback for first run)
+cp "$PROJECT_DIR/target/release/libstandground_core.dylib" "$APP_DIR/Contents/Resources/libstandground_core.dylib"
 
 # Copy Info.plist and stamp version
 cp "$PROJECT_DIR/Info.plist" "$APP_DIR/Contents/Info.plist"

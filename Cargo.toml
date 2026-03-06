@@ -4,6 +4,14 @@ version = "0.1.10"
 edition = "2021"
 description = "macOS menu bar app that saves and restores window positions per monitor configuration"
 
+[lib]
+name = "standground_core"
+crate-type = ["cdylib"]
+
+[[bin]]
+name = "standground"
+path = "src/main.rs"
+
 [dependencies]
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSData", "NSTimer", "NSGeometry"] }

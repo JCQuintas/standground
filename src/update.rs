@@ -1,5 +1,4 @@
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 #[derive(Debug, Clone)]
@@ -43,17 +42,7 @@ pub fn check_for_update(current_version: &str) -> Result<Option<UpdateInfo>, Str
         .as_array()
         .ok_or("Missing assets in response")?;
 
-    // .app bundles download the DMG (preserves code signature / TCC permissions).
-    // Standalone installs download the bare binary tarball.
-    let current_exe =
-        std::env::current_exe().map_err(|e| format!("Failed to get current exe: {e}"))?;
-    let use_dmg = is_app_bundle(&current_exe);
-
-    let expected_name = if use_dmg {
-        format!("StandGround-darwin-{arch_suffix}.dmg")
-    } else {
-        format!("standground-darwin-{arch_suffix}.tar.gz")
-    };
+    let expected_name = format!("libstandground_core-darwin-{arch_suffix}.dylib");
 
     let download_url = assets
         .iter()
@@ -76,186 +65,31 @@ fn is_newer(latest: &str, current: &str) -> bool {
     l > c
 }
 
+/// Download the new dylib to the app data directory.
 pub fn apply_update(download_url: &str) -> Result<(), String> {
-    let current_exe =
-        std::env::current_exe().map_err(|e| format!("Failed to get current exe: {e}"))?;
+    let data_dir = crate::storage::data_dir()
+        .map_err(|e| format!("Failed to determine data directory: {e}"))?;
 
-    if is_app_bundle(&current_exe) {
-        apply_dmg_update(download_url, &current_exe)
-    } else {
-        apply_binary_update(download_url, &current_exe)
-    }
-}
+    let dylib_name = "libstandground_core.dylib";
+    let final_path = data_dir.join(dylib_name);
+    let temp_path = data_dir.join(format!("{dylib_name}.tmp"));
 
-/// Download the DMG, mount it, and replace the current .app bundle with the
-/// new signed one. Preserves the code signature so TCC permissions survive.
-fn apply_dmg_update(
-    download_url: &str,
-    current_exe: &std::path::Path,
-) -> Result<(), String> {
-    let temp_dir = std::env::temp_dir().join("standground-update");
-    let _ = fs::remove_dir_all(&temp_dir);
-    fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temp dir: {e}"))?;
-
-    let dmg_path = temp_dir.join("update.dmg");
-
-    // Download
     let mut response = ureq::get(download_url)
         .header("User-Agent", &format!("standground/{}", crate::VERSION))
         .call()
         .map_err(|e| format!("Failed to download update: {e}"))?;
 
     let mut file =
-        fs::File::create(&dmg_path).map_err(|e| format!("Failed to create DMG file: {e}"))?;
+        fs::File::create(&temp_path).map_err(|e| format!("Failed to create temp file: {e}"))?;
     std::io::copy(&mut response.body_mut().as_reader(), &mut file)
-        .map_err(|e| format!("Failed to write DMG: {e}"))?;
+        .map_err(|e| format!("Failed to write dylib: {e}"))?;
     drop(file);
 
-    // Mount
-    let mount_point = temp_dir.join("mount");
-    fs::create_dir_all(&mount_point)
-        .map_err(|e| format!("Failed to create mount point: {e}"))?;
-
-    let output = Command::new("hdiutil")
-        .args([
-            "attach",
-            dmg_path.to_str().unwrap(),
-            "-mountpoint",
-            mount_point.to_str().unwrap(),
-            "-nobrowse",
-            "-quiet",
-        ])
-        .output()
-        .map_err(|e| format!("Failed to mount DMG: {e}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("hdiutil attach failed: {stderr}"));
-    }
-
-    let detach = |mp: &std::path::Path| {
-        let _ = Command::new("hdiutil")
-            .args(["detach", mp.to_str().unwrap(), "-quiet"])
-            .status();
-    };
-
-    // Locate the new .app inside the DMG
-    let new_app = mount_point.join("StandGround.app");
-    if !new_app.exists() {
-        detach(&mount_point);
-        return Err("StandGround.app not found in DMG".to_string());
-    }
-
-    // Locate the current .app bundle
-    let current_app = find_app_bundle(current_exe).ok_or_else(|| {
-        detach(&mount_point);
-        "Not running from an .app bundle".to_string()
-    })?;
-
-    // Swap: backup current, copy new, clean up
-    let backup = current_app.with_extension("app.bak");
-    let _ = fs::remove_dir_all(&backup);
-
-    fs::rename(&current_app, &backup).map_err(|e| {
-        detach(&mount_point);
-        format!("Failed to backup current app: {e}")
-    })?;
-
-    // cp -R preserves the code signature
-    let status = Command::new("cp")
-        .args(["-R"])
-        .arg(&new_app)
-        .arg(&current_app)
-        .status()
-        .map_err(|e| {
-            let _ = fs::rename(&backup, &current_app);
-            detach(&mount_point);
-            format!("Failed to copy new app: {e}")
-        })?;
-
-    if !status.success() {
-        let _ = fs::rename(&backup, &current_app);
-        detach(&mount_point);
-        return Err("Failed to copy new .app bundle".to_string());
-    }
-
-    let _ = fs::remove_dir_all(&backup);
-    detach(&mount_point);
-    let _ = fs::remove_dir_all(&temp_dir);
+    // Atomic rename
+    fs::rename(&temp_path, &final_path)
+        .map_err(|e| format!("Failed to install dylib: {e}"))?;
 
     Ok(())
-}
-
-/// Download a tarball and replace the standalone binary.
-fn apply_binary_update(
-    download_url: &str,
-    current_exe: &std::path::Path,
-) -> Result<(), String> {
-    let temp_dir = std::env::temp_dir().join("standground-update");
-    let _ = fs::remove_dir_all(&temp_dir);
-    fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temp dir: {e}"))?;
-
-    let archive_path = temp_dir.join("update.tar.gz");
-
-    let mut response = ureq::get(download_url)
-        .header("User-Agent", &format!("standground/{}", crate::VERSION))
-        .call()
-        .map_err(|e| format!("Failed to download update: {e}"))?;
-
-    let mut file =
-        fs::File::create(&archive_path).map_err(|e| format!("Failed to create archive: {e}"))?;
-    std::io::copy(&mut response.body_mut().as_reader(), &mut file)
-        .map_err(|e| format!("Failed to write archive: {e}"))?;
-
-    let status = Command::new("tar")
-        .args(["xzf", archive_path.to_str().unwrap()])
-        .current_dir(&temp_dir)
-        .status()
-        .map_err(|e| format!("Failed to extract archive: {e}"))?;
-
-    if !status.success() {
-        return Err("tar extraction failed".to_string());
-    }
-
-    let new_binary = temp_dir.join("standground");
-    if !new_binary.exists() {
-        return Err("Extracted binary not found".to_string());
-    }
-
-    let backup = current_exe.with_extension("bak");
-    let _ = fs::remove_file(&backup);
-    fs::rename(current_exe, &backup)
-        .map_err(|e| format!("Failed to backup current binary: {e}"))?;
-    fs::copy(&new_binary, current_exe)
-        .map_err(|e| format!("Failed to install new binary: {e}"))?;
-
-    let perms = fs::Permissions::from_mode(0o755);
-    fs::set_permissions(current_exe, perms)
-        .map_err(|e| format!("Failed to set permissions: {e}"))?;
-
-    let _ = fs::remove_dir_all(&temp_dir);
-    let _ = fs::remove_file(&backup);
-
-    Ok(())
-}
-
-fn is_app_bundle(exe_path: &std::path::Path) -> bool {
-    exe_path
-        .parent()
-        .map(|p| p.ends_with("Contents/MacOS"))
-        .unwrap_or(false)
-}
-
-/// Walk up from the executable to find the `.app` bundle root.
-fn find_app_bundle(exe_path: &std::path::Path) -> Option<std::path::PathBuf> {
-    let macos_dir = exe_path.parent()?;
-    let contents_dir = macos_dir.parent()?;
-    let app_dir = contents_dir.parent()?;
-    if macos_dir.ends_with("Contents/MacOS") {
-        Some(app_dir.to_path_buf())
-    } else {
-        None
-    }
 }
 
 pub fn restart_app() -> ! {

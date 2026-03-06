@@ -28,7 +28,10 @@ pub struct SavedWindow {
     pub bundle_id: String,
     pub window_title: String,
     pub bounds: WindowBounds,
-    pub space_id: u64,
+    /// Ordinal index of the space (0-based) — stable across reboots,
+    /// unlike the raw CGS space ID which is reassigned on every login.
+    #[serde(alias = "space_id")]
+    pub space_index: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,13 +50,22 @@ pub fn save_current_layout(store: &mut LayoutStore) -> Result<usize, String> {
     let config = get_current_configuration()?;
     let windows = enumerate_windows();
 
+    // Build a map from raw space_id → ordinal index so we store
+    // a stable reference that survives reboots.
+    let (all_spaces, _) = get_all_space_ids();
+    let space_id_to_index: HashMap<u64, usize> = all_spaces
+        .iter()
+        .enumerate()
+        .map(|(i, &sid)| (sid, i))
+        .collect();
+
     let saved_windows: Vec<SavedWindow> = windows
         .iter()
         .map(|w| SavedWindow {
             bundle_id: w.bundle_id.clone(),
             window_title: w.window_title.clone(),
             bounds: w.bounds.clone(),
-            space_id: w.space_id,
+            space_index: space_id_to_index.get(&w.space_id).copied().unwrap_or(0),
         })
         .collect();
 
@@ -84,10 +96,13 @@ pub fn restore_layout(store: &LayoutStore) -> Result<(usize, usize), String> {
     let display_uuid = display_uuid.unwrap_or_default();
     let original_space = get_active_space();
 
-    // Group saved windows by space_id
+    // Map saved space_index back to current space IDs and group by space_id
     let mut saved_by_space: HashMap<u64, Vec<&SavedWindow>> = HashMap::new();
     for sw in &layout.windows {
-        saved_by_space.entry(sw.space_id).or_default().push(sw);
+        let space_id = all_spaces.get(sw.space_index).copied().unwrap_or(0);
+        if space_id != 0 {
+            saved_by_space.entry(space_id).or_default().push(sw);
+        }
     }
 
     let mut restored = 0;

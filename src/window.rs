@@ -52,15 +52,10 @@ extern "C" {
         space_id: u64,
     );
     fn CGSCopyManagedDisplaySpaces(cid: CGSConnectionID) -> core_foundation::base::CFTypeRef;
-    fn CGSAddWindowsToSpaces(
+    fn CGSMoveWindowsToManagedSpace(
         cid: CGSConnectionID,
         windows: core_foundation::base::CFTypeRef,
-        spaces: core_foundation::base::CFTypeRef,
-    );
-    fn CGSRemoveWindowsFromSpaces(
-        cid: CGSConnectionID,
-        windows: core_foundation::base::CFTypeRef,
-        spaces: core_foundation::base::CFTypeRef,
+        space_id: u64,
     );
 }
 
@@ -183,28 +178,17 @@ pub fn switch_to_space(space_id: u64, display_uuid: &str) {
     }
 }
 
-/// Move a window from one space to another using private CGS APIs.
-pub fn move_window_to_space(window_id: u32, from_space: u64, to_space: u64) {
+/// Move a window to a specific space using private CGS API.
+pub fn move_window_to_space(window_id: u32, to_space: u64) {
     unsafe {
         let cid = CGSMainConnectionID();
         let win_num = CFNumber::from(window_id as i32);
         let win_arr = core_foundation::array::CFArray::from_CFTypes(&[win_num.as_CFType()]);
 
-        let from_num = CFNumber::from(from_space as i64);
-        let from_arr = core_foundation::array::CFArray::from_CFTypes(&[from_num.as_CFType()]);
-
-        let to_num = CFNumber::from(to_space as i64);
-        let to_arr = core_foundation::array::CFArray::from_CFTypes(&[to_num.as_CFType()]);
-
-        CGSAddWindowsToSpaces(
+        CGSMoveWindowsToManagedSpace(
             cid,
             win_arr.as_concrete_TypeRef() as core_foundation::base::CFTypeRef,
-            to_arr.as_concrete_TypeRef() as core_foundation::base::CFTypeRef,
-        );
-        CGSRemoveWindowsFromSpaces(
-            cid,
-            win_arr.as_concrete_TypeRef() as core_foundation::base::CFTypeRef,
-            from_arr.as_concrete_TypeRef() as core_foundation::base::CFTypeRef,
+            to_space,
         );
     }
 }

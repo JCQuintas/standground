@@ -116,7 +116,7 @@ pub fn restore_layout(store: &LayoutStore) -> Result<(usize, usize), String> {
         if let Some(saved) = find_matching_saved(w, &by_key, &by_bundle) {
             let target_space = all_spaces.get(saved.space_index).copied().unwrap_or(0);
             if target_space != 0 && w.space_id != 0 && w.space_id != target_space {
-                move_window_to_space(w.window_id, w.space_id, target_space);
+                move_window_to_space(w.window_id, target_space);
             }
         }
     }

@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::display::{get_current_configuration, DisplayConfiguration};
 use crate::window::{
-    enumerate_windows, get_active_space, get_all_space_ids, set_window_position, switch_to_space,
-    WindowInfo,
+    enumerate_windows, get_active_space, get_all_space_ids, move_window_to_space,
+    set_window_position, switch_to_space, WindowInfo,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -96,7 +96,36 @@ pub fn restore_layout(store: &LayoutStore) -> Result<(usize, usize), String> {
     let display_uuid = display_uuid.unwrap_or_default();
     let original_space = get_active_space();
 
-    // Map saved space_index back to current space IDs and group by space_id
+    // Build global lookup indexes from all saved windows
+    let mut by_key: HashMap<WindowMatchKey, &SavedWindow> = HashMap::new();
+    let mut by_bundle: HashMap<String, Vec<&SavedWindow>> = HashMap::new();
+    for sw in &layout.windows {
+        let key = WindowMatchKey {
+            bundle_id: sw.bundle_id.clone(),
+            window_title: sw.window_title.clone(),
+        };
+        by_key.insert(key, sw);
+        by_bundle.entry(sw.bundle_id.clone()).or_default().push(sw);
+    }
+
+    // Enumerate all current windows and match them to saved windows.
+    // Move any that are on the wrong space before repositioning.
+    let current_windows = enumerate_windows();
+
+    for w in &current_windows {
+        if let Some(saved) = find_matching_saved(w, &by_key, &by_bundle) {
+            let target_space = all_spaces.get(saved.space_index).copied().unwrap_or(0);
+            if target_space != 0 && w.space_id != 0 && w.space_id != target_space {
+                move_window_to_space(w.window_id, w.space_id, target_space);
+            }
+        }
+    }
+
+    // Small delay to let space moves settle
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    // Now reposition windows: group saved windows by target space,
+    // switch to each space to set positions.
     let mut saved_by_space: HashMap<u64, Vec<&SavedWindow>> = HashMap::new();
     for sw in &layout.windows {
         let space_id = all_spaces.get(sw.space_index).copied().unwrap_or(0);
@@ -107,7 +136,6 @@ pub fn restore_layout(store: &LayoutStore) -> Result<(usize, usize), String> {
 
     let mut restored = 0;
 
-    // Walk spaces in order: switch to each, restore its windows
     for &space_id in &all_spaces {
         let saved_windows = match saved_by_space.get(&space_id) {
             Some(ws) => ws,
@@ -121,22 +149,25 @@ pub fn restore_layout(store: &LayoutStore) -> Result<(usize, usize), String> {
         }
 
         // Build lookup indexes for this space's saved windows
-        let mut by_key: HashMap<WindowMatchKey, &SavedWindow> = HashMap::new();
-        let mut by_bundle: HashMap<String, Vec<&SavedWindow>> = HashMap::new();
+        let mut space_by_key: HashMap<WindowMatchKey, &SavedWindow> = HashMap::new();
+        let mut space_by_bundle: HashMap<String, Vec<&SavedWindow>> = HashMap::new();
         for sw in saved_windows {
             let key = WindowMatchKey {
                 bundle_id: sw.bundle_id.clone(),
                 window_title: sw.window_title.clone(),
             };
-            by_key.insert(key, sw);
-            by_bundle.entry(sw.bundle_id.clone()).or_default().push(sw);
+            space_by_key.insert(key, sw);
+            space_by_bundle
+                .entry(sw.bundle_id.clone())
+                .or_default()
+                .push(sw);
         }
 
-        // Re-enumerate windows on this space
+        // Re-enumerate windows (they may have moved spaces)
         let current_windows = enumerate_windows();
 
         for w in &current_windows {
-            let saved = find_matching_saved(w, &by_key, &by_bundle);
+            let saved = find_matching_saved(w, &space_by_key, &space_by_bundle);
 
             if let Some(saved) = saved {
                 if set_window_position(w.pid, w.window_id, &saved.bounds) {

@@ -33,6 +33,40 @@ impl DisplayConfiguration {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DisplayFrame {
+    pub fingerprint: DisplayFingerprint,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+pub fn get_current_display_frames() -> Result<Vec<DisplayFrame>, String> {
+    let display_ids =
+        CGDisplay::active_displays().map_err(|e| format!("Failed to get active displays: {e}"))?;
+
+    let mut frames = Vec::new();
+    for &display_id in &display_ids {
+        let display = CGDisplay::new(display_id);
+        let bounds = display.bounds();
+        frames.push(DisplayFrame {
+            fingerprint: DisplayFingerprint {
+                vendor_id: display.vendor_number(),
+                model_id: display.model_number(),
+                serial_number: display.serial_number(),
+                width: bounds.size.width as u32,
+                height: bounds.size.height as u32,
+            },
+            x: bounds.origin.x,
+            y: bounds.origin.y,
+            width: bounds.size.width,
+            height: bounds.size.height,
+        });
+    }
+    Ok(frames)
+}
+
 pub fn get_current_configuration() -> Result<DisplayConfiguration, String> {
     let display_ids =
         CGDisplay::active_displays().map_err(|e| format!("Failed to get active displays: {e}"))?;

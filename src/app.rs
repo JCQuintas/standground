@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::mpsc;
 use std::time::Instant;
 
@@ -57,6 +58,7 @@ define_class!(
                                     eprintln!("[debug] Current layout store:\n{json}");
                                 }
                             }
+                            rebuild_menu(state);
                         }
                         Err(e) => {
                             eprintln!("Error saving layout: {e}");
@@ -66,17 +68,54 @@ define_class!(
             }
         }
 
-        #[unsafe(method(restoreLayout:))]
-        fn restore_layout(&self, _sender: &AnyObject) {
+        #[unsafe(method(restoreSpecificLayout:))]
+        fn restore_specific_layout(&self, sender: &AnyObject) {
             unsafe {
                 if let Some(state_ptr) = APP_STATE {
                     let state = &*state_ptr;
-                    match layout::restore_layout(&state.layout_store) {
-                        Ok((restored, total)) => {
-                            println!("Restored {restored}/{total} windows");
+                    let tag: isize = msg_send![sender, tag];
+                    let all = layout::get_all_layouts(&state.layout_store);
+                    if let Some((_, saved)) = all.get(tag as usize) {
+                        match layout::restore_saved_layout(saved) {
+                            Ok((restored, total)) => {
+                                println!("Restored {restored}/{total} windows");
+                            }
+                            Err(e) => {
+                                eprintln!("Error restoring layout: {e}");
+                            }
                         }
-                        Err(e) => {
-                            eprintln!("Error restoring layout: {e}");
+                    } else {
+                        eprintln!("Error: layout index {tag} out of bounds");
+                    }
+                }
+            }
+        }
+
+        #[unsafe(method(deleteLayout:))]
+        fn delete_layout(&self, sender: &AnyObject) {
+            unsafe {
+                if let Some(state_ptr) = APP_STATE {
+                    let state = &mut *state_ptr;
+                    let tag: isize = msg_send![sender, tag];
+                    let all = layout::get_all_layouts(&state.layout_store);
+                    if let Some((config_key, saved)) = all.get(tag as usize) {
+                        let config_key = config_key.clone();
+                        let saved_at = saved.saved_at;
+                        drop(all);
+                        match layout::delete_layout(
+                            &mut state.layout_store,
+                            &config_key,
+                            saved_at,
+                        ) {
+                            Ok(()) => {
+                                if let Err(e) = storage::save_layouts(&state.layout_store) {
+                                    eprintln!("Error saving layouts: {e}");
+                                }
+                                rebuild_menu(state);
+                            }
+                            Err(e) => {
+                                eprintln!("Error deleting layout: {e}");
+                            }
                         }
                     }
                 }
@@ -345,6 +384,7 @@ pub fn run() {
             config.auto_update,
             &None,
             has_accessibility,
+            &layout_store,
             mtm,
         );
         status_item.setMenu(Some(&menu));
@@ -450,6 +490,7 @@ unsafe fn build_menu(
     auto_update: bool,
     update_info: &Option<UpdateInfo>,
     has_accessibility: bool,
+    layout_store: &LayoutStore,
     mtm: MainThreadMarker,
 ) -> Retained<NSMenu> {
     let menu = NSMenu::new(mtm);
@@ -498,16 +539,102 @@ unsafe fn build_menu(
     save_item.setEnabled(has_accessibility);
     menu.addItem(&save_item);
 
-    // Restore Layout
+    // Restore Layout (submenu with saved layouts)
     let restore_title = NSString::from_str("Restore Layout");
     let restore_item = NSMenuItem::initWithTitle_action_keyEquivalent(
         NSMenuItem::alloc(mtm),
         &restore_title,
-        Some(sel!(restoreLayout:)),
+        None,
         &empty_str,
     );
-    restore_item.setTarget(Some(&*handler));
     restore_item.setEnabled(has_accessibility);
+
+    let restore_submenu = NSMenu::new(mtm);
+    let all_layouts = layout::get_all_layouts(layout_store);
+
+    if all_layouts.is_empty() {
+        let no_layouts_title = NSString::from_str("No saved layouts");
+        let no_layouts_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &no_layouts_title,
+            None,
+            &empty_str,
+        );
+        no_layouts_item.setEnabled(false);
+        restore_submenu.addItem(&no_layouts_item);
+    } else {
+        // Count layouts per config to decide whether to show dates
+        let mut config_counts: HashMap<&str, usize> = HashMap::new();
+        for (key, _) in &all_layouts {
+            *config_counts.entry(key.as_str()).or_default() += 1;
+        }
+
+        for (i, (_, saved)) in all_layouts.iter().enumerate() {
+            let display_label = saved.display_config.display_label();
+            let needs_date =
+                config_counts.get(saved.display_config.config_key().as_str()).copied().unwrap_or(0) > 1;
+            let label = if needs_date {
+                format!(
+                    "{} — {}",
+                    display_label,
+                    saved.saved_at.format("%b %d, %H:%M")
+                )
+            } else {
+                display_label
+            };
+            let item_title = NSString::from_str(&label);
+            let item = NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &item_title,
+                Some(sel!(restoreSpecificLayout:)),
+                &empty_str,
+            );
+            item.setTarget(Some(&*handler));
+            let _: () = msg_send![&*item, setTag: i as isize];
+            restore_submenu.addItem(&item);
+        }
+
+        // Separator before delete section
+        restore_submenu.addItem(&NSMenuItem::separatorItem(mtm));
+
+        // Delete submenu
+        let delete_title = NSString::from_str("Delete Layout");
+        let delete_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &delete_title,
+            None,
+            &empty_str,
+        );
+        let delete_submenu = NSMenu::new(mtm);
+        for (i, (_, saved)) in all_layouts.iter().enumerate() {
+            let display_label = saved.display_config.display_label();
+            let needs_date =
+                config_counts.get(saved.display_config.config_key().as_str()).copied().unwrap_or(0) > 1;
+            let label = if needs_date {
+                format!(
+                    "{} — {}",
+                    display_label,
+                    saved.saved_at.format("%b %d, %H:%M")
+                )
+            } else {
+                display_label
+            };
+            let item_title = NSString::from_str(&label);
+            let item = NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &item_title,
+                Some(sel!(deleteLayout:)),
+                &empty_str,
+            );
+            item.setTarget(Some(&*handler));
+            let _: () = msg_send![&*item, setTag: i as isize];
+            delete_submenu.addItem(&item);
+        }
+        let _: () = msg_send![&*delete_item, setSubmenu: &*delete_submenu];
+        restore_submenu.addItem(&delete_item);
+    }
+
+    let _: () = msg_send![&*restore_item, setSubmenu: &*restore_submenu];
     menu.addItem(&restore_item);
 
     // Separator
@@ -639,6 +766,7 @@ unsafe fn rebuild_menu(state: &AppState) {
         state.config.auto_update,
         &state.update_info,
         state.has_accessibility,
+        &state.layout_store,
         state.mtm,
     );
     state.status_item.setMenu(Some(&menu));

@@ -22,6 +22,15 @@ impl DisplayConfiguration {
     pub fn config_key(&self) -> String {
         serde_json::to_string(&self.0).unwrap_or_default()
     }
+
+    /// Human-readable label from display resolutions, e.g. "1800×1169 + 1920×1200".
+    pub fn display_label(&self) -> String {
+        self.0
+            .iter()
+            .map(|f| format!("{}×{}", f.width, f.height))
+            .collect::<Vec<_>>()
+            .join(" + ")
+    }
 }
 
 pub fn get_current_configuration() -> Result<DisplayConfiguration, String> {

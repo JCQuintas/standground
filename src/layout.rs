@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
+use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 
 use crate::display::{get_current_configuration, DisplayConfiguration};
@@ -43,7 +44,31 @@ pub struct SavedLayout {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LayoutStore {
-    pub layouts: HashMap<String, SavedLayout>,
+    #[serde(default, deserialize_with = "deserialize_layouts")]
+    pub layouts: HashMap<String, Vec<SavedLayout>>,
+}
+
+/// Deserialize layouts supporting both old format (single SavedLayout per key)
+/// and new format (Vec<SavedLayout> per key).
+fn deserialize_layouts<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, Vec<SavedLayout>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let map: HashMap<String, serde_json::Value> = HashMap::deserialize(deserializer)?;
+    let mut result = HashMap::new();
+    for (key, value) in map {
+        let layouts = if value.is_array() {
+            serde_json::from_value(value).map_err(serde::de::Error::custom)?
+        } else {
+            let single: SavedLayout =
+                serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+            vec![single]
+        };
+        result.insert(key, layouts);
+    }
+    Ok(result)
 }
 
 pub fn save_current_layout(store: &mut LayoutStore) -> Result<usize, String> {
@@ -76,19 +101,42 @@ pub fn save_current_layout(store: &mut LayoutStore) -> Result<usize, String> {
         saved_at: Utc::now(),
     };
 
-    store.layouts.insert(config.config_key(), layout);
+    store.layouts.entry(config.config_key()).or_default().push(layout);
     Ok(count)
 }
 
+/// Get all saved layouts across all display configurations, sorted newest first.
+/// Returns (config_key, layout) pairs.
+pub fn get_all_layouts(store: &LayoutStore) -> Vec<(String, &SavedLayout)> {
+    let mut all: Vec<_> = store
+        .layouts
+        .iter()
+        .flat_map(|(key, layouts)| layouts.iter().map(move |l| (key.clone(), l)))
+        .collect();
+    all.sort_by(|a, b| b.1.saved_at.cmp(&a.1.saved_at));
+    all
+}
+
+/// Restore the most recent layout for the current display configuration.
 pub fn restore_layout(store: &LayoutStore) -> Result<(usize, usize), String> {
     let config = get_current_configuration()?;
     let key = config.config_key();
 
-    let layout = store
+    let layouts = store
         .layouts
         .get(&key)
         .ok_or_else(|| "No saved layout for current display configuration".to_string())?;
 
+    let layout = layouts
+        .iter()
+        .max_by_key(|l| l.saved_at)
+        .ok_or_else(|| "No saved layout for current display configuration".to_string())?;
+
+    restore_saved_layout(layout)
+}
+
+/// Restore a specific saved layout.
+pub fn restore_saved_layout(layout: &SavedLayout) -> Result<(usize, usize), String> {
     let total = layout.windows.len();
 
     // Get all spaces in order and display UUID for switching
@@ -183,6 +231,31 @@ pub fn restore_layout(store: &LayoutStore) -> Result<(usize, usize), String> {
     }
 
     Ok((restored, total))
+}
+
+/// Delete a saved layout identified by its config key and timestamp.
+pub fn delete_layout(
+    store: &mut LayoutStore,
+    config_key: &str,
+    saved_at: DateTime<Utc>,
+) -> Result<(), String> {
+    let layouts = store
+        .layouts
+        .get_mut(config_key)
+        .ok_or_else(|| "Layout config not found".to_string())?;
+
+    let idx = layouts
+        .iter()
+        .position(|l| l.saved_at == saved_at)
+        .ok_or_else(|| "Layout not found".to_string())?;
+
+    layouts.remove(idx);
+
+    if layouts.is_empty() {
+        store.layouts.remove(config_key);
+    }
+
+    Ok(())
 }
 
 /// Match a current window to a saved window.

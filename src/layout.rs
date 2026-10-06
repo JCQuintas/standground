@@ -18,15 +18,13 @@ pub struct WindowBounds {
     pub height: f64,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct WindowMatchKey {
-    pub bundle_id: String,
-    pub window_title: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SavedWindow {
     pub bundle_id: String,
+    /// CGWindowID at save time. Exact match while the window stays open
+    /// (dock/undock); meaningless after the app or system restarts.
+    #[serde(default)]
+    pub window_id: u32,
     pub window_title: String,
     pub bounds: WindowBounds,
     /// Ordinal index of the space (0-based) — stable across reboots,
@@ -87,10 +85,13 @@ pub fn save_current_layout(store: &mut LayoutStore) -> Result<usize, String> {
         .map(|(i, &sid)| (sid, i))
         .collect();
 
+    // Windows on no Space are helpers (popups, placeholders, autofill), not real windows.
     let saved_windows: Vec<SavedWindow> = windows
         .iter()
+        .filter(|w| w.space_id != 0)
         .map(|w| SavedWindow {
             bundle_id: w.bundle_id.clone(),
+            window_id: w.window_id,
             window_title: w.window_title.clone(),
             bounds: w.bounds.clone(),
             space_index: space_id_to_index.get(&w.space_id).copied().unwrap_or(0),
@@ -152,24 +153,13 @@ pub fn restore_saved_layout(layout: &SavedLayout) -> Result<(usize, usize), Stri
     let display_uuid = display_uuid.unwrap_or_default();
     let original_space = get_active_space();
 
-    // Build global lookup indexes from all saved windows
-    let mut by_key: HashMap<WindowMatchKey, &SavedWindow> = HashMap::new();
-    let mut by_bundle: HashMap<String, Vec<&SavedWindow>> = HashMap::new();
-    for sw in &layout.windows {
-        let key = WindowMatchKey {
-            bundle_id: sw.bundle_id.clone(),
-            window_title: sw.window_title.clone(),
-        };
-        by_key.insert(key, sw);
-        by_bundle.entry(sw.bundle_id.clone()).or_default().push(sw);
-    }
-
     // Enumerate all current windows and match them to saved windows.
     // Move any that are on the wrong space before repositioning.
+    let all_saved: Vec<&SavedWindow> = layout.windows.iter().collect();
     let current_windows = enumerate_windows();
 
     for w in &current_windows {
-        if let Some(saved) = find_matching_saved(w, &by_key, &by_bundle) {
+        if let Some(saved) = find_matching_saved(w, &all_saved, &current_windows) {
             let target_space = all_spaces.get(saved.space_index).copied().unwrap_or(0);
             if target_space != 0 && w.space_id != 0 && w.space_id != target_space {
                 move_window_to_space(w.window_id, target_space);
@@ -204,26 +194,11 @@ pub fn restore_saved_layout(layout: &SavedLayout) -> Result<(usize, usize), Stri
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
 
-        // Build lookup indexes for this space's saved windows
-        let mut space_by_key: HashMap<WindowMatchKey, &SavedWindow> = HashMap::new();
-        let mut space_by_bundle: HashMap<String, Vec<&SavedWindow>> = HashMap::new();
-        for sw in saved_windows {
-            let key = WindowMatchKey {
-                bundle_id: sw.bundle_id.clone(),
-                window_title: sw.window_title.clone(),
-            };
-            space_by_key.insert(key, sw);
-            space_by_bundle
-                .entry(sw.bundle_id.clone())
-                .or_default()
-                .push(sw);
-        }
-
         // Re-enumerate windows (they may have moved spaces)
         let current_windows = enumerate_windows();
 
         for w in &current_windows {
-            let saved = find_matching_saved(w, &space_by_key, &space_by_bundle);
+            let saved = find_matching_saved(w, saved_windows, &current_windows);
 
             if let Some(saved) = saved {
                 let adjusted = adjust_bounds(
@@ -383,26 +358,91 @@ pub fn delete_layout(
 }
 
 /// Match a current window to a saved window.
-/// Priority: exact (bundle_id + title), then bundle_id-only if unambiguous.
+/// Priority: same window ID, then same non-empty title, then bundle_id-only
+/// if the app restarted since saving and had a single saved window.
 fn find_matching_saved<'a>(
     w: &WindowInfo,
-    by_key: &HashMap<WindowMatchKey, &'a SavedWindow>,
-    by_bundle: &HashMap<String, Vec<&'a SavedWindow>>,
+    saved: &[&'a SavedWindow],
+    current: &[WindowInfo],
 ) -> Option<&'a SavedWindow> {
-    let exact_key = WindowMatchKey {
-        bundle_id: w.bundle_id.clone(),
-        window_title: w.window_title.clone(),
-    };
+    let same_app = || saved.iter().copied().filter(|s| s.bundle_id == w.bundle_id);
 
-    if let Some(sw) = by_key.get(&exact_key) {
-        return Some(sw);
+    if let Some(s) = same_app().find(|s| s.window_id != 0 && s.window_id == w.window_id) {
+        return Some(s);
     }
 
-    if let Some(saved_list) = by_bundle.get(&w.bundle_id) {
-        if saved_list.len() == 1 {
-            return Some(saved_list[0]);
+    if !w.window_title.is_empty() {
+        if let Some(s) = same_app().find(|s| s.window_title == w.window_title) {
+            return Some(s);
         }
     }
 
-    None
+    // Titles are empty without Screen Recording, so they can't tell same-app
+    // windows apart. If any saved ID is still open, unmatched windows are new;
+    // and guessing between several saved windows stacks them all on one frame.
+    let still_open = same_app().any(|s| {
+        current
+            .iter()
+            .any(|c| c.window_id == s.window_id && c.bundle_id == s.bundle_id)
+    });
+    let mut candidates = same_app();
+    match (candidates.next(), candidates.next()) {
+        (Some(s), None) if !still_open => Some(s),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn saved(bundle: &str, id: u32, height: f64) -> SavedWindow {
+        SavedWindow {
+            bundle_id: bundle.into(),
+            window_id: id,
+            window_title: String::new(),
+            bounds: WindowBounds {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height,
+            },
+            space_index: 0,
+        }
+    }
+
+    fn live(bundle: &str, id: u32) -> WindowInfo {
+        WindowInfo {
+            pid: 1,
+            window_id: id,
+            bundle_id: bundle.into(),
+            window_title: String::new(),
+            bounds: WindowBounds {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            space_id: 1,
+        }
+    }
+
+    #[test]
+    fn matches_untitled_windows_without_collapsing() {
+        // Real window plus a popup helper saved after it, both untitled (macOS 27 Chrome).
+        let real = saved("chrome", 10, 1071.0);
+        let popup = saved("chrome", 11, 139.0);
+        let slack = saved("slack", 7, 847.0);
+        let all = [&real, &popup, &slack];
+        let current = [live("chrome", 10), live("chrome", 99), live("slack", 5)];
+        let height = |w| find_matching_saved(w, &all, &current).map(|s| s.bounds.height);
+
+        assert_eq!(height(&current[0]), Some(1071.0)); // same ID wins
+        assert_eq!(height(&current[1]), None); // new window of a still-running app
+        assert_eq!(height(&current[2]), Some(847.0)); // restarted app, single saved window
+
+        // Old layouts (no IDs) with several same-app entries: leave the window alone.
+        let (a, b) = (saved("chrome", 0, 1071.0), saved("chrome", 0, 139.0));
+        assert!(find_matching_saved(&current[1], &[&a, &b], &current).is_none());
+    }
 }
